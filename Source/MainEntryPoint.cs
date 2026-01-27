@@ -12,9 +12,9 @@ class Program
     public struct STARTUPINFO
     {
         public uint cb;
-        public string lpReserved;
-        public string lpDesktop;
-        public string lpTitle;
+        public IntPtr lpReserved;
+        public IntPtr lpDesktop;
+        public IntPtr lpTitle;
         public uint dwX;
         public uint dwY;
         public uint dwXSize;
@@ -44,14 +44,14 @@ class Program
     [StructLayout(LayoutKind.Sequential)]
     struct EXCEPTION_REGISTRATION_RECORD
     {
-        public IntPtr Next;
-        public IntPtr Handler;
+        public nint Next;
+        public nint Handler;
     }
 
     [StructLayout(LayoutKind.Sequential)]
     struct NT_TIB
     {
-        public IntPtr ExceptionList;
+        public nint ExceptionList;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -68,42 +68,42 @@ class Program
     private static extern uint GetVersion();
 
     [DllImport("kernel32.dll")]
-    private static extern IntPtr GetCommandLineA();
+    private static extern nint GetCommandLineA();
 
     [DllImport("kernel32.dll")]
-    private static extern IntPtr GetModuleHandleA(IntPtr lpModuleName);
+    private static extern nint GetModuleHandleA(nint lpModuleName);
 
-    [DllImport("kernel32.dll")]
+    [DllImport("kernel32.dll", CharSet = CharSet.Ansi)]
     private static extern void GetStartupInfoA(out STARTUPINFO lpStartupInfo);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr GetEnvironmentStringsW();
+    private static extern nint GetEnvironmentStringsW();
 
     [DllImport("kernel32.dll")]
-    private static extern IntPtr GetEnvironmentStrings();
+    private static extern nint GetEnvironmentStrings();
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern int WideCharToMultiByte(
         uint CodePage,
         uint dwFlags,
-        IntPtr lpWideCharStr,
+        nint lpWideCharStr,
         int cchWideChar,
         StringBuilder lpMultiByteStr,
         int cbMultiByte,
-        IntPtr lpDefaultChar,
-        IntPtr lpUsedDefaultChar);
+        nint lpDefaultChar,
+        nint lpUsedDefaultChar);
 
     [DllImport("kernel32.dll")]
-    private static extern bool FreeEnvironmentStringsW(IntPtr lpszEnvironmentBlock);
+    private static extern bool FreeEnvironmentStringsW(nint lpszEnvironmentBlock);
 
     [DllImport("kernel32.dll")]
-    private static extern bool FreeEnvironmentStringsA(IntPtr lpszEnvironmentBlock);
+    private static extern bool FreeEnvironmentStringsA(nint lpszEnvironmentBlock);
 
     [DllImport("kernel32.dll")]
-    private static extern IntPtr HeapCreate(uint flOptions, uint dwInitialSize, uint dwMaximumSize);
+    private static extern nint HeapCreate(uint flOptions, uint dwInitialSize, uint dwMaximumSize);
 
     [DllImport("kernel32.dll")]
-    private static extern bool HeapDestroy(IntPtr hHeap);
+    private static extern bool HeapDestroy(nint hHeap);
 
     [DllImport("kernel32.dll")]
     private static extern void ExitProcess(uint uExitCode);
@@ -113,16 +113,16 @@ class Program
 
     [DllImport("kernel32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool TlsSetValue(uint dwTlsIndex, IntPtr lpTlsValue);
+    private static extern bool TlsSetValue(uint dwTlsIndex, nint lpTlsValue);
 
     [DllImport("kernel32.dll")]
     private static extern uint GetCurrentThreadId();
 
     [DllImport("kernel32.dll")]
-    private static extern IntPtr GetStdHandle(int nStdHandle);
+    private static extern nint GetStdHandle(int nStdHandle);
 
     [DllImport("kernel32.dll")]
-    private static extern int GetFileType(IntPtr hFile);
+    private static extern int GetFileType(nint hFile);
 
     [DllImport("kernel32.dll")]
     private static extern uint SetHandleCount(uint uNumber);
@@ -132,21 +132,24 @@ class Program
     private static extern bool GetCPInfo(uint CodePage, out CPINFO lpCPInfo);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Ansi)]
-    private static extern uint GetModuleFileNameA(IntPtr hModule, IntPtr lpFilename, uint nSize);
+    private static extern uint GetModuleFileNameA(nint hModule, nint lpFilename, uint nSize);
+
+    [DllImport("user32.dll", CharSet = CharSet.Ansi, SetLastError = true)]
+    private static extern nint LoadCursorFromFileA(string lpFileName);
 
     #endregion
 
     #region Globals
 
-    private static IntPtr data_56b5e8;
+    private static nint data_56b5e8;
     private static int data_56b5ec;
-    private static IntPtr data_56b600;
+    private static nint data_56b600;
     private static uint data_56b700;
     private static uint data_50c6e4;
-    private static IntPtr data_569994 = IntPtr.Zero;
-    private static IntPtr data_569a20 = IntPtr.Zero;
+    private static nint data_569994 = IntPtr.Zero;
+    private static nint data_569a20 = IntPtr.Zero;
     private static int data_56b704 = 0;
-    private static IntPtr data_569cc0 = IntPtr.Zero;
+    private static nint data_569cc0 = IntPtr.Zero;
     private static uint data_56b3c0;
     private static int data_56b5e4;
     private static byte[] data_56b4e0 = new byte[256];
@@ -154,20 +157,22 @@ class Program
     private static int data_56b3dc;
     private static int data_569cd0;
     private static int data_56b3d4;
-    private static IntPtr data_569bbc = Marshal.AllocHGlobal(260);
-    private static IntPtr data_56b714 = IntPtr.Zero;
+    private static nint data_569bbc = Marshal.AllocHGlobal(260);
+    private static nint data_56b714 = IntPtr.Zero;
     private static readonly uint data_56999c = 1;
-    private static IntPtr data_50c230 = IntPtr.Zero;
+    private static nint data_50c230 = IntPtr.Zero;
     private static int data_4fe05c = 0;
     private static int data_4fe000 = 0;
-    private static readonly IntPtr data_56b4e1;
-    private static IntPtr data_50f624;
-    private static IntPtr data_50f620;
-    private static IntPtr data_5697ec;
-    private static IntPtr data_50f6a4;
-    private static IntPtr data_554d74;
-    private static IntPtr data_50f698;
-    private static IntPtr data_4fe164;
+    private static readonly nint data_56b4e1;
+    private static nint data_50f624;
+    private static nint data_50f620;
+    private static nint data_5697ec;
+    private static nint data_50f6a4;
+    private static nint data_554d74;
+    private static nint data_50f698;
+    private static nint data_4fe164;
+
+    private static OpenVikings.DLLCalls.Gedx8musicdrv.IGedx8MusicDriver dmDriver;
 
     #endregion
 
@@ -181,37 +186,26 @@ class Program
         ArgumentHandler argumentHandler = new();
         argumentHandler.HandleArguments(args);
 
-        // TODO: Add sub_4e1816() as opt_glob.ini checker and also evaluate all other routes for ini files and settings.
-
-        if (TryCreateMutex("weltwunder") == MutexCreationResult.Success)
-        {
-            InitGameHandler.InitGame();
-
-           // argumentHandler.SetGfxFullscreen("1");
-           // argumentHandler.SetGfxFullscreenToggle("1");
-           // argumentHandler.SetGfxScreenWidth("1280");
-           // argumentHandler.SetGfxScreenHeight("720");
-           // argumentHandler.SetGfxScreenDepth("32");
-           // argumentHandler.SetFxQuality("2");
-           // argumentHandler.SetDmOff("1");
-           // argumentHandler.SetDmVolume("80");
-           // argumentHandler.SetCdaOff("false");
-        }
-        else
+        if (TryCreateMutex("weltwunder") != MutexCreationResult.Success)
         {
             Environment.Exit(0);
+            return;
         }
 
-        IntPtr arg1 = sub_4e5ddd(0x18);
-        IntPtr arg4 = sub_4e5ddd(0x18);
+        InitGameHandler.InitGame();
+
+        nint arg1 = sub_4e5ddd(0x168);
+        nint arg4 = sub_4e5ddd(0x18);
 
         sub_4e5df0(arg1, 0, 0x168);
-        Marshal.WriteInt32(arg1, 3);
-        Marshal.WriteInt32(arg1 + 4, 0);
+        Marshal.WriteInt32((IntPtr)arg1, 3);
+        Marshal.WriteInt32((IntPtr)(arg1 + 4), 0);
 
-        IntPtr eax = sub_4e5ddd(1);
+        nint eax = sub_4e5ddd(1);
         if (eax != IntPtr.Zero)
+        {
             sub_4069f3(eax);
+        }
 
         PathHandler.GetFolderPath("logs");
 
@@ -221,83 +215,111 @@ class Program
         sub_4e1463(data_5697ec, arg4);
         sub_4e1ca0(data_5697ec);
 
+        // ------------------------------------------------------------
+        // Datafile detection
+        // ------------------------------------------------------------
         byte var_5 = 0;
         int edi = 9;
 
         do
         {
-            IntPtr var_6c = Marshal.AllocHGlobal(0x100); // Arbitrary size for buffer
-            sub_4e5d8b(var_6c, $"use_data_file_{edi}");
-
-            IntPtr eax_2 = sub_4e1658(var_6c);
-            if (eax_2 != IntPtr.Zero && sub_4e5d10(eax_2) > 0 && sub_40659c(eax_2, 0) != 0)
+            nint var_6c = (nint)Marshal.AllocHGlobal(0x100);
+            try
             {
-                IntPtr eax_5 = sub_4e5ddd(0x14);
-                uint eax_6 = eax_5 == IntPtr.Zero ? 0 : sub_40665d(eax_5);
+                sub_4e5d8b(var_6c, $"use_data_file_{edi}");
 
-                sub_4064e4(eax_6);
-                var_5 = 1;
+                nint eax_2 = sub_4e1658(var_6c);
+                if (eax_2 != IntPtr.Zero && sub_4e5d10(eax_2) > 0 && sub_40659c(eax_2, 0) != 0)
+                {
+                    nint eax_5 = sub_4e5ddd(0x14);
+                    uint eax_6 = eax_5 == IntPtr.Zero ? 0u : sub_40665d(eax_5);
+
+                    sub_4064e4(eax_6);
+                    var_5 = 1;
+                }
             }
-            edi--;
-        } while (edi >= 0);
+            finally
+            {
+                Marshal.FreeHGlobal((IntPtr)var_6c);
+            }
 
+            edi--;
+        }
+        while (edi >= 0);
+
+        // ------------------------------------------------------------
+        // Fallback: load datax\\libs\\dataXXXX.lib only if var_5 == 0
+        // ------------------------------------------------------------
         if (var_5 == 0)
         {
             for (int i = 10; i >= 1; i--)
             {
-                IntPtr var_6c = Marshal.AllocHGlobal(0x100); // Arbitrary size for buffer
-                sub_4e5d8b(var_6c, $"datax\\libs\\data{i:D4}.lib");
-
-                if (sub_40659c(var_6c, 0) != 0)
+                nint var_6c = (nint)Marshal.AllocHGlobal(0x100);
+                try
                 {
-                    IntPtr eax_8 = sub_4e5ddd(0x14);
-                    uint eax_9 = eax_8 == IntPtr.Zero ? 0 : sub_40665d(eax_8);
+                    sub_4e5d8b(var_6c, $"datax\\libs\\data{i:D4}.lib");
 
-                    sub_4064e4(eax_9);
+                    if (sub_40659c(var_6c, 0) != 0)
+                    {
+                        nint eax_8 = sub_4e5ddd(0x14);
+                        uint eax_9 = eax_8 == IntPtr.Zero ? 0u : sub_40665d(eax_8);
+
+                        sub_4064e4(eax_9);
+                    }
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal((IntPtr)var_6c);
                 }
             }
         }
 
         sub_4063f9("$gameroot$", data_4fe164);
 
-        if (sub_406542("datax\\mouse\\mousenormal.cur", arg1) != 0)
-        {
-            Marshal.WriteIntPtr(arg1 + 0x150, LoadCursorFromFileA(arg1));
-        }
-
-        if (sub_406542("datax\\mouse\\mousepressed.cur", arg1) != 0)
-        {
-            Marshal.WriteIntPtr(arg1 + 0x154, LoadCursorFromFileA(arg1));
-        }
-
-        if (sub_406542("datax\\mouse\\mouseright.cur", arg1) != 0)
-        {
-            Marshal.WriteIntPtr(arg1 + 0x158, LoadCursorFromFileA(arg1));
-        }
+        ApplyCursorIfResolved("datax\\mouse\\mousenormal.cur", arg1, 0x150);
+        ApplyCursorIfResolved("datax\\mouse\\mousepressed.cur", arg1, 0x154);
+        ApplyCursorIfResolved("datax\\mouse\\mouseright.cur", arg1, 0x158);
 
         sub_405ac8(sub_4e163b("set_language"));
 
         if (sub_4791a6(data_554d74) != 0)
         {
-            Marshal.WriteInt32(arg1 + 0x0c, (int)sub_478d16(data_554d74));
-            Marshal.WriteInt32(arg1 + 0x10, (int)sub_478d27(data_554d74));
-            Marshal.WriteInt32(arg1 + 0x14, (int)sub_478d5e(data_554d74));
-            IntPtr eax_36 = data_554d74;
-            SendMessageA(sub_478ced(eax_36), 0x80, 0, LoadIconA((uint)Marshal.ReadInt32(eax_36), 0x65));
-            SendMessageA(sub_478ced(eax_36), 0x80, 1, LoadIconA((uint)Marshal.ReadInt32(eax_36), 0x66));
-            SendMessageA(sub_478ced(data_554d74), 0x0c, 0, Marshal.StringToHGlobalAnsi("Weltwunder"));
+            Marshal.WriteInt32((IntPtr)(arg1 + 0x0c), unchecked((int)sub_478d16(data_554d74)));
+            Marshal.WriteInt32((IntPtr)(arg1 + 0x10), unchecked((int)sub_478d27(data_554d74)));
+            Marshal.WriteInt32((IntPtr)(arg1 + 0x14), unchecked((int)sub_478d5e(data_554d74)));
+
+            nint eax_36 = data_554d74;
+            SendMessageA(sub_478ced(eax_36), 0x80, 0, LoadIconA((uint)Marshal.ReadInt32((IntPtr)eax_36), 0x65));
+            SendMessageA(sub_478ced(eax_36), 0x80, 1, LoadIconA((uint)Marshal.ReadInt32((IntPtr)eax_36), 0x66));
+
+            IntPtr titlePtr = IntPtr.Zero;
+            try
+            {
+                titlePtr = Marshal.StringToHGlobalAnsi("Weltwunder");
+                SendMessageA(sub_478ced(data_554d74), 0x0c, 0, (nint)titlePtr);
+            }
+            finally
+            {
+                if (titlePtr != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(titlePtr);
+                }
+            }
+
             sub_4016ee(arg1);
 
-            if (Marshal.ReadByte(arg1 + 0x14c) != 0)
+            if (Marshal.ReadByte((IntPtr)(arg1 + 0x14c)) != 0)
             {
-                sub_478b53(Marshal.ReadIntPtr(arg1 + 0x150));
+                sub_478b53(Marshal.ReadIntPtr((IntPtr)(arg1 + 0x150)));
             }
 
             sub_401750(arg1);
 
-            IntPtr eax_42 = sub_4e5ddd(0x4300);
+            nint eax_42 = sub_4e5ddd(0x4300);
             if (eax_42 != IntPtr.Zero)
+            {
                 sub_40471f(eax_42, sub_478ced(data_554d74), 1);
+            }
 
             sub_4e163b("fx_quality");
             sub_404aac(data_50f6a4, sub_4e163b("fx_volume"));
@@ -307,36 +329,93 @@ class Program
                 sub_4e167d(data_5697ec, "music_mode", 1, 1, IntPtr.Zero);
             }
 
-            IntPtr eax_49 = sub_4e5ddd(0x224);
+            nint eax_49 = sub_4e5ddd(0x224);
             if (eax_49 != IntPtr.Zero)
+            {
                 sub_403524(eax_49);
+            }
 
-            GetCurrentDirectoryA(0x103, arg1);
-            sub_4e5c30(arg1, "\\datax\\dm2\\");
-            sub_4035b6(data_50f698, IntPtr.Zero, arg1);
+            string dmPath = Path.Combine(Environment.CurrentDirectory, "datax", "dm2") + "\\";
 
-            sub_403932(data_50f698, sub_4e163b("dm_volume"));
+            dmDriver = OpenVikings.DLLCalls.Gedx8musicdrv.Gedx8musicdrvFacade.GetInterface2_Managed();
+            dmDriver.SetBasePath(dmPath);
+            dmDriver.Initialize();
+
+            int mode = 0; // TODO: map from settings if needed
+            int sampleRate;
+            int bytesOrBits;
+
+            if (mode == 1)
+            {
+                sampleRate = 22050;
+                bytesOrBits = 16;
+            }
+            else if (mode == 2)
+            {
+                sampleRate = 11025;
+                bytesOrBits = 8;
+            }
+            else
+            {
+                sampleRate = 44100;
+                bytesOrBits = 64;
+            }
+
+            int instance = dmDriver.CreateInstance();
+            _ = dmDriver.InitSynthesizer(instance, new OpenVikings.DLLCalls.Gedx8musicdrv.Gedx8InitParams(sampleRate, bytesOrBits));
+
+            int dmVolume = sub_4e163b("dm_volume");
+
+            // TODO: dmDriver.SetVolume(dmVolume);
+            sub_403932(data_50f698, dmVolume);
 
             if (sub_4e163b("music_mode") == 3)
             {
                 sub_4e167d(data_5697ec, "music_mode", 1, 1, IntPtr.Zero);
             }
 
-            Marshal.WriteInt32(arg1, 2);
+            Marshal.WriteInt32((IntPtr)arg1, 2);
+        }
+    }
+
+    private static void ApplyCursorIfResolved(string cursorRelPath, nint arg1, int cursorOffset)
+    {
+        nint tmp = (nint)Marshal.AllocHGlobal(0x104);
+        try
+        {
+            if (FUN_00406542(cursorRelPath, tmp))
+            {
+                string resolved = Marshal.PtrToStringAnsi((IntPtr)tmp) ?? string.Empty;
+                nint cursorHandle = LoadCursorFromFileA(resolved);
+
+                Marshal.WriteIntPtr((IntPtr)(arg1 + cursorOffset), (IntPtr)cursorHandle);
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal((IntPtr)tmp);
+        }
+    }
+
+    private static void sub_4e5df0(nint ptr, byte value, int size)
+    {
+        for (int i = 0; i < size; i++)
+        {
+            Marshal.WriteByte((IntPtr)ptr, i, value);
         }
     }
 
     private static int sub_4ec5de(int arg1)
     {
         uint flOptions = (uint)(arg1 == 0 ? 0 : 1); // Annahme: flOptions basiert auf dem Argument, wenn arg1 0 ist, dann 0, sonst 1
-        IntPtr eax = HeapCreate(flOptions, 0x1000, 0);
+        nint eax = HeapCreate(flOptions, 0x1000, 0);
         data_56b5e8 = eax;
 
         if (eax != IntPtr.Zero)
         {
             int eax_1 = sub_4ec496();
             data_56b5ec = eax_1;
-            IntPtr eax_2 = IntPtr.Zero;
+            nint eax_2 = IntPtr.Zero;
 
             if (eax_1 != 3)
             {
@@ -368,13 +447,13 @@ class Program
         return 0;
     }
 
-    private static IntPtr sub_4edfa1()
+    private static nint sub_4edfa1()
     {
         // Implementiere die Logik von sub_4edfa1
         return IntPtr.Zero;
     }
 
-    private static IntPtr sub_4ed45a(int size)
+    private static nint sub_4ed45a(int size)
     {
         // Implementiere die Logik von sub_4ed45a
         return IntPtr.Zero;
@@ -411,7 +490,7 @@ class Program
 
         if (eax != 0xffffffff)
         {
-            IntPtr lpTlsValue = sub_4ef3ac(1, 0x74);
+            nint lpTlsValue = sub_4ef3ac(1, 0x74);
 
             if (lpTlsValue != IntPtr.Zero && TlsSetValue(data_50c6e4, lpTlsValue))
             {
@@ -432,15 +511,15 @@ class Program
         Console.WriteLine("sub_4ebdc2 aufgerufen.");
     }
 
-    private static IntPtr sub_4ef3ac(int arg1, int arg2)
+    private static nint sub_4ef3ac(int arg1, int arg2)
     {
         // Implementiere die Logik von sub_4ef3ac
         // Hier könnte beispielsweise Speicher allokiert werden
-        IntPtr allocatedMemory = Marshal.AllocHGlobal(arg2);
+        nint allocatedMemory = Marshal.AllocHGlobal(arg2);
         return allocatedMemory;
     }
 
-    private static void sub_4eb1bb(IntPtr lpTlsValue)
+    private static void sub_4eb1bb(nint lpTlsValue)
     {
         // Implementiere die Logik von sub_4eb1bb
         Console.WriteLine("sub_4eb1bb aufgerufen.");
@@ -448,7 +527,7 @@ class Program
 
     private static uint sub_4ea927()
     {
-        IntPtr esi = sub_4e85fc(0x480);
+        nint esi = sub_4e85fc(0x480);
 
         if (esi == IntPtr.Zero)
         {
@@ -458,7 +537,7 @@ class Program
         data_56b600 = esi;
         data_56b700 = 0x20;
 
-        IntPtr i = esi + 0x480;
+        nint i = esi + 0x480;
         while (esi.ToInt64() < i.ToInt64())
         {
             Marshal.WriteByte(esi, 4, 0);
@@ -475,13 +554,13 @@ class Program
         // In C# müssen diese Variablen und die Logik, die auf sie zugreift, entsprechend implementiert werden
         // Zum Beispiel:
         short var_1a = 0; // Beispielwert, muss aus STARTUPINFO oder einem anderen Kontext ermittelt werden
-        IntPtr var_18 = IntPtr.Zero; // Beispielwert, muss ebenfalls ermittelt werden
+        nint var_18 = IntPtr.Zero; // Beispielwert, muss ebenfalls ermittelt werden
 
         if (var_1a != 0 && var_18 != IntPtr.Zero)
         {
             int i_1 = Marshal.ReadInt32(var_18);
-            IntPtr ebx_1 = var_18 + 4;
-            IntPtr var_8_1 = ebx_1 + i_1;
+            nint ebx_1 = var_18 + 4;
+            nint var_8_1 = ebx_1 + i_1;
 
             if (i_1 >= 0x800)
             {
@@ -495,7 +574,7 @@ class Program
 
                 do
                 {
-                    IntPtr eax_4 = sub_4e85fc(0x480);
+                    nint eax_4 = sub_4e85fc(0x480);
 
                     if (eax_4 == IntPtr.Zero)
                     {
@@ -506,7 +585,7 @@ class Program
                     data_56b700 += 0x20;
                     data_56b604[index++] = eax_4;
 
-                    IntPtr j = eax_4 + 0x480;
+                    nint j = eax_4 + 0x480;
                     while (eax_4.ToInt64() < j.ToInt64())
                     {
                         Marshal.WriteByte(eax_4, 4, 0);
@@ -523,7 +602,7 @@ class Program
             {
                 do
                 {
-                    IntPtr hFile_1 = Marshal.ReadIntPtr(var_8_1);
+                    nint hFile_1 = Marshal.ReadIntPtr(var_8_1);
 
                     if (hFile_1 != new IntPtr(unchecked((int)0xffffffff)))
                     {
@@ -535,7 +614,7 @@ class Program
                             if ((eax_5 & 8) != 0 || eax_6 != 0)
                             {
                                 int offset = (esi_2 >> 5) * 0x24 + (esi_2 & 0x1f) * 0x24;
-                                IntPtr eax_10 = data_56b600 + offset;
+                                nint eax_10 = data_56b600 + offset;
                                 Marshal.WriteIntPtr(eax_10, hFile_1);
                                 Marshal.WriteByte(eax_10, 4, eax_5);
                             }
@@ -552,7 +631,7 @@ class Program
         for (int i_2 = 0; i_2 < 3; i_2++)
         {
             int offset = i_2 * 9 * 4;
-            IntPtr esi_3 = data_56b600 + offset;
+            nint esi_3 = data_56b600 + offset;
 
             if (Marshal.ReadIntPtr(esi_3) != new IntPtr(unchecked((int)0xffffffff)))
             {
@@ -563,7 +642,7 @@ class Program
                 Marshal.WriteByte(esi_3, 4, 0x81);
                 int nStdHandle = (i_2 == 0) ? -10 : (i_2 == 1) ? -11 : -12;
 
-                IntPtr hFile = GetStdHandle(nStdHandle);
+                nint hFile = GetStdHandle(nStdHandle);
                 if (hFile == new IntPtr(unchecked((int)0xffffffff)))
                 {
                     Marshal.WriteByte(esi_3, 4, (byte)(Marshal.ReadByte(esi_3, 4) | 0x40));
@@ -613,10 +692,10 @@ class Program
         return arg; // Beispielrückgabewert
     }
 
-    private static IntPtr sub_4ec337()
+    private static nint sub_4ec337()
     {
-        IntPtr esi = IntPtr.Zero;
-        IntPtr lpMultiByteStr_2 = IntPtr.Zero;
+        nint esi = IntPtr.Zero;
+        nint lpMultiByteStr_2 = IntPtr.Zero;
 
         if (data_569cc0 == IntPtr.Zero)
         {
@@ -624,7 +703,7 @@ class Program
 
             if (esi == IntPtr.Zero)
             {
-                IntPtr penv = GetEnvironmentStrings();
+                nint penv = GetEnvironmentStrings();
 
                 if (penv == IntPtr.Zero)
                 {
@@ -641,7 +720,7 @@ class Program
         }
         else if (data_569cc0 == new IntPtr(2))
         {
-            IntPtr penv = GetEnvironmentStrings();
+            nint penv = GetEnvironmentStrings();
             if (penv != IntPtr.Zero)
             {
                 lpMultiByteStr_2 = ProcessAnsiEnvironmentStrings(penv);
@@ -663,9 +742,9 @@ class Program
         return lpMultiByteStr_2;
     }
 
-    private static IntPtr ProcessAnsiEnvironmentStrings(IntPtr penv)
+    private static nint ProcessAnsiEnvironmentStrings(nint penv)
     {
-        IntPtr penv_1 = penv;
+        nint penv_1 = penv;
 
         while (Marshal.ReadByte(penv_1) != 0)
         {
@@ -679,7 +758,7 @@ class Program
             }
         }
 
-        IntPtr esi_1 = sub_4e85fc((int)(penv_1.ToInt64() - penv.ToInt64()) + 1);
+        nint esi_1 = sub_4e85fc((int)(penv_1.ToInt64() - penv.ToInt64()) + 1);
 
         if (esi_1 != IntPtr.Zero)
         {
@@ -693,9 +772,9 @@ class Program
         return esi_1;
     }
 
-    private static IntPtr ProcessUnicodeEnvironmentStrings(IntPtr esi)
+    private static nint ProcessUnicodeEnvironmentStrings(nint esi)
     {
-        IntPtr eax_4 = esi;
+        nint eax_4 = esi;
 
         while (Marshal.ReadInt16(eax_4) != 0)
         {
@@ -716,7 +795,7 @@ class Program
             return IntPtr.Zero;
         }
 
-        IntPtr lpMultiByteStr = sub_4e85fc(cbMultiByte);
+        nint lpMultiByteStr = sub_4e85fc(cbMultiByte);
 
         if (lpMultiByteStr != IntPtr.Zero)
         {
@@ -731,20 +810,20 @@ class Program
         return lpMultiByteStr;
     }
 
-    private static IntPtr sub_4e85fc(int size)
+    private static nint sub_4e85fc(int size)
     {
         return Marshal.AllocHGlobal(size);
     }
 
-    private static IntPtr sub_4e8513(IntPtr arg1)
+    private static nint sub_4e8513(nint arg1)
     {
         int var_8 = -1;
         int var_c = 0x4fb9a8;
         int var_10 = 0x4ec734;
 
         TEB teb = new TEB();
-        IntPtr exceptionListPtr = teb.NtTib.ExceptionList;
-        IntPtr exceptionListPtr_1 = exceptionListPtr;
+        nint exceptionListPtr = teb.NtTib.ExceptionList;
+        nint exceptionListPtr_1 = exceptionListPtr;
         teb.NtTib.ExceptionList = exceptionListPtr_1;
 
         if (arg1 != IntPtr.Zero)
@@ -757,9 +836,9 @@ class Program
                 {
                     sub_4ebdeb(9);
                     int var_8_3 = 1;
-                    IntPtr var_2c;
+                    nint var_2c;
                     int var_24;
-                    IntPtr eax_2 = sub_4ee1fd(arg1, out var_2c, out var_24);
+                    nint eax_2 = sub_4ee1fd(arg1, out var_2c, out var_24);
 
                     if (eax_2 != IntPtr.Zero)
                     {
@@ -783,7 +862,7 @@ class Program
             {
                 sub_4ebdeb(9);
                 var_8 = 0;
-                IntPtr eax_1 = sub_4ed4a2(arg1);
+                nint eax_1 = sub_4ed4a2(arg1);
 
                 if (eax_1 != IntPtr.Zero)
                 {
@@ -809,7 +888,7 @@ class Program
         Console.WriteLine($"sub_4ebdeb aufgerufen mit Argument: {arg}");
     }
 
-    private static IntPtr sub_4ee1fd(IntPtr arg1, out IntPtr var_2c, out int var_24)
+    private static nint sub_4ee1fd(nint arg1, out nint var_2c, out int var_24)
     {
         Console.WriteLine("sub_4ee1fd aufgerufen");
         var_2c = IntPtr.Zero;
@@ -817,57 +896,57 @@ class Program
         return IntPtr.Zero;
     }
 
-    private static void sub_4ee254(IntPtr var_2c, int var_24, IntPtr eax_2)
+    private static void sub_4ee254(nint var_2c, int var_24, nint eax_2)
     {
         Console.WriteLine("sub_4ee254 aufgerufen");
     }
-    private static IntPtr sub_4e85d5()
+    private static nint sub_4e85d5()
     {
         Console.WriteLine("sub_4e85d5 aufgerufen");
         return IntPtr.Zero;
     }
 
-    private static IntPtr HeapFree(IntPtr hHeap, uint dwFlags, IntPtr lpMem)
+    private static nint HeapFree(nint hHeap, uint dwFlags, nint lpMem)
     {
         Console.WriteLine("HeapFree aufgerufen");
         Marshal.FreeHGlobal(lpMem);
         return IntPtr.Zero;
     }
 
-    private static IntPtr sub_4ed4a2(IntPtr arg1)
+    private static nint sub_4ed4a2(nint arg1)
     {
         Console.WriteLine("sub_4ed4a2 aufgerufen");
         return IntPtr.Zero;
     }
 
-    private static void sub_4ed4cd(IntPtr eax_1, IntPtr arg1)
+    private static void sub_4ed4cd(nint eax_1, nint arg1)
     {
         Console.WriteLine("sub_4ed4cd aufgerufen");
     }
 
-    private static IntPtr sub_4e857d()
+    private static nint sub_4e857d()
     {
         Console.WriteLine("sub_4e857d aufgerufen");
         return IntPtr.Zero;
     }
 
-    private static void sub_4e6170(IntPtr destination, IntPtr source, int length)
+    private static void sub_4e6170(nint destination, nint source, int length)
     {
         byte[] buffer = new byte[length];
         Marshal.Copy(source, buffer, 0, length);
         Marshal.Copy(buffer, 0, destination, length);
     }
 
-    private static IntPtr sub_4ec183(string arg1, IntPtr arg2, IntPtr arg3, ref int arg4, ref int arg5)
+    private static nint sub_4ec183(string arg1, nint arg2, nint arg3, ref int arg4, ref int arg5)
     {
         int localArg5 = arg5;
         int localArg4 = arg4;
 
         localArg5 = 0;
-        IntPtr esi = arg3;
-        IntPtr edi = arg2;
+        nint esi = arg3;
+        nint edi = arg2;
         localArg4 = 1;
-        IntPtr eax_1 = Marshal.StringToHGlobalAnsi(arg1);
+        nint eax_1 = Marshal.StringToHGlobalAnsi(arg1);
 
         if (edi != IntPtr.Zero)
         {
@@ -1222,176 +1301,20 @@ class Program
         return result;
     }
 
-    private static IntPtr sub_4e5c20(IntPtr arg1, IntPtr arg2)
+    private static void FUN_004e5c20_StrCpy(StringBuilder dest, string src)
     {
-        IntPtr edi = arg1;
-        IntPtr ecx = arg2;
+        ArgumentNullException.ThrowIfNull(dest);
 
-        // Erste Schleife: Ausrichten auf 4-Byte-Grenze
-        while ((ecx.ToInt64() & 3) != 0)
+        dest.Clear();
+        if (!string.IsNullOrEmpty(src))
         {
-            byte edx = Marshal.ReadByte(ecx);
-            ecx += 1;
-
-            if (edx == 0)
-            {
-                Marshal.WriteByte(edi, edx);
-                return arg1;
-            }
-
-            Marshal.WriteByte(edi, edx);
-            edi += 1;
-        }
-
-        // Zweite Schleife: 4-Byte-Blöcke verarbeiten
-        while (true)
-        {
-            int eax_1 = Marshal.ReadInt32(ecx);
-            int edx = eax_1;
-            ecx += 4;
-
-            if ((((eax_1 ^ 0xffffffff) ^ (0x7efefeff + eax_1)) & 0x81010100) != 0)
-            {
-                if ((edx & 0xFF) == 0)
-                {
-                    Marshal.WriteByte(edi, 0);
-                    return arg1;
-                }
-
-                if ((edx & 0xFF00) == 0)
-                {
-                    Marshal.WriteInt16(edi, (short)(edx & 0xFFFF));
-                    return arg1;
-                }
-
-                if ((edx & 0xFF0000) == 0)
-                {
-                    Marshal.WriteInt16(edi, (short)(edx & 0xFFFF));
-                    Marshal.WriteByte(edi + 2, 0);
-                    return arg1;
-                }
-
-                if ((edx & 0xFF000000) == 0)
-                {
-                    Marshal.WriteInt32(edi, edx);
-                    return arg1;
-                }
-            }
-
-            Marshal.WriteInt32(edi, edx);
-            edi += 4;
+            dest.Append(src);
         }
     }
 
-    private static IntPtr sub_4e5c30(IntPtr arg1, IntPtr arg2)
+    private static int sub_4e5d10(nint arg1)
     {
-        IntPtr ecx = arg1;
-        IntPtr edi = IntPtr.Zero;
-
-        // Erste Schleife: Ausrichten auf 4-Byte-Grenze
-        while ((ecx.ToInt64() & 3) != 0)
-        {
-            byte eax = Marshal.ReadByte(ecx);
-            ecx += 1;
-
-            if (eax == 0)
-            {
-                edi = ecx - 1;
-                return CopyString(edi, arg2, arg1);
-            }
-        }
-
-        // Zweite Schleife: 4-Byte-Blöcke verarbeiten
-        while (true)
-        {
-            int eax_1 = Marshal.ReadInt32(ecx);
-            ecx += 4;
-
-            if ((((eax_1 ^ 0xffffffff) ^ (0x7efefeff + eax_1)) & 0x81010100) != 0)
-            {
-                if ((eax_1 & 0xFF) == 0)
-                {
-                    edi = ecx - 4;
-                    break;
-                }
-                if ((eax_1 & 0xFF00) == 0)
-                {
-                    edi = ecx - 3;
-                    break;
-                }
-                if ((eax_1 & 0xFF0000) == 0)
-                {
-                    edi = ecx - 2;
-                    break;
-                }
-                if ((eax_1 & 0xFF000000) == 0)
-                {
-                    edi = ecx - 1;
-                    break;
-                }
-            }
-        }
-
-        return CopyString(edi, arg2, arg1);
-    }
-
-    private static IntPtr CopyString(IntPtr edi, IntPtr ecx_1, IntPtr arg1)
-    {
-        // Erste Schleife: Ausrichten auf 4-Byte-Grenze
-        while ((ecx_1.ToInt64() & 3) != 0)
-        {
-            byte edx = Marshal.ReadByte(ecx_1);
-            ecx_1 += 1;
-
-            if (edx == 0)
-            {
-                Marshal.WriteByte(edi, edx);
-                return arg1;
-            }
-
-            Marshal.WriteByte(edi, edx);
-            edi += 1;
-        }
-
-        // Zweite Schleife: 4-Byte-Blöcke verarbeiten
-        while (true)
-        {
-            int edx = Marshal.ReadInt32(ecx_1);
-            ecx_1 += 4;
-
-            if ((((edx ^ 0xffffffff) ^ (0x7efefeff + edx)) & 0x81010100) != 0)
-            {
-                if ((edx & 0xFF) == 0)
-                {
-                    Marshal.WriteByte(edi, 0);
-                    return arg1;
-                }
-                if ((edx & 0xFF00) == 0)
-                {
-                    Marshal.WriteInt16(edi, (short)(edx & 0xFFFF));
-                    return arg1;
-                }
-                if ((edx & 0xFF0000) == 0)
-                {
-                    Marshal.WriteInt16(edi, (short)(edx & 0xFFFF));
-                    Marshal.WriteByte(edi + 2, 0);
-                    return arg1;
-                }
-                if ((edx & 0xFF000000) == 0)
-                {
-                    Marshal.WriteInt32(edi, edx);
-                    return arg1;
-                }
-            }
-
-            Marshal.WriteInt32(edi, edx);
-            edi += 4;
-        }
-    }
-
-    private static int sub_4e5d10(IntPtr arg1)
-    {
-        IntPtr ecx = arg1;
+        nint ecx = arg1;
 
         // Loop 1: Align ecx to a 4-byte boundary
         while ((ecx.ToInt64() & 3) != 0)
@@ -1440,7 +1363,7 @@ class Program
 
     private static int sub_4ea109()
     {
-        IntPtr eax_1 = data_50c230;
+        nint eax_1 = data_50c230;
 
         if (eax_1 != IntPtr.Zero)
         {
@@ -1460,13 +1383,13 @@ class Program
         return 0;  // oder ein anderer Wert, der in diesem Kontext sinnvoll ist
     }
 
-    private static void sub_4ea20f(IntPtr arg1, int arg2)
+    private static void sub_4ea20f(nint arg1, int arg2)
     {
         // Schleife über die Speicheradressen von arg1 bis arg2
         while (arg1.ToInt32() < arg2)
         {
             // Liest die Adresse der Funktion
-            IntPtr eax = Marshal.ReadIntPtr(arg1);
+            nint eax = Marshal.ReadIntPtr(arg1);
 
             if (eax != IntPtr.Zero)
             {
@@ -1502,55 +1425,127 @@ class Program
     {
         Console.WriteLine($"sub_4ebe4c aufgerufen mit Argument: {arg}");
     }
-    private static void sub_4069f3(IntPtr arg) { }
+    private static void sub_4069f3(nint arg) { }
     private static void sub_4e1551(string arg) { }
-    private static void sub_4e1463(IntPtr arg1, string arg2) { }
-    private static void sub_4e1ca0(IntPtr arg) { }
-    private static void sub_4e5d8b(IntPtr arg1, string format) { }
-    private static IntPtr sub_4e1658(IntPtr arg) { return IntPtr.Zero; }
-    private static int sub_40659c(IntPtr arg1, int arg2) { return 0; }
-    private static uint sub_40665d(IntPtr arg) { return 0; }
+    private static void sub_4e1ca0(nint arg) { }
+    private static void sub_4e5d8b(nint arg1, string format) { }
+    private static nint sub_4e1658(nint arg) { return IntPtr.Zero; }
+    private static int sub_40659c(nint arg1, int arg2) { return 0; }
+    private static uint sub_40665d(nint arg) { return 0; }
     private static void sub_4064e4(uint arg) { }
-    private static void sub_479076(IntPtr arg) { }
+    private static void sub_479076(nint arg) { }
     private static int sub_4e163b(string arg) { return 0; }
     private static void sub_4016ea() { }
-    private static void sub_4790cd(IntPtr arg1, IntPtr arg2) { }
-    private static void sub_4063f9(string arg1, IntPtr arg2) { }
-    private static int sub_406542(string arg1, IntPtr arg2) { return 0; }
-    private static IntPtr LoadCursorFromFileA(IntPtr arg) { return IntPtr.Zero; }
-    private static void sub_405ac8(int arg) { }
-    private static int sub_4791a6(IntPtr arg) { return 0; }
-    private static uint sub_478d16(IntPtr arg) { return 0; }
-    private static uint sub_478d27(IntPtr arg) { return 0; }
-    private static uint sub_478d5e(IntPtr arg) { return 0; }
-    private static IntPtr sub_478ced(IntPtr arg) { return IntPtr.Zero; }
-    private static IntPtr LoadIconA(uint hInstance, int lpIconName) { return IntPtr.Zero; }
-    private static IntPtr SendMessageA(IntPtr hWnd, uint Msg, int wParam, IntPtr lParam) { return IntPtr.Zero; }
-    private static void sub_4016ee(IntPtr arg) { }
-    private static void sub_478b53(IntPtr arg) { }
-    private static void sub_401750(IntPtr arg) { }
-    private static void sub_40471f(IntPtr arg1, IntPtr arg2, int arg3) { }
-    private static void sub_404aac(IntPtr arg1, int arg2) { }
-    private static void sub_403524(IntPtr arg) { }
-    private static void GetCurrentDirectoryA(int nBufferLength, IntPtr lpBuffer) { }
-    private static void sub_4e5c30(IntPtr arg1, string arg2) { }
-    private static void sub_4035b6(IntPtr arg1, IntPtr arg2, IntPtr arg3) { }
-    private static void sub_403932(IntPtr arg1, int arg2) { }
-    private static void sub_4e167d(IntPtr arg1, string arg2, int arg3, int arg4, IntPtr arg5) { }
-    private static IntPtr sub_402761() { return IntPtr.Zero; }
-    private static void sub_403e45(IntPtr arg) { }
-    private static void sub_403e6f(IntPtr arg1, IntPtr arg2) { }
-    private static void sub_4e1463(IntPtr arg1, IntPtr arg2) { }
-    private static void sub_4e5df0(IntPtr ptr, byte value, int size)
+    private static void sub_4790cd(nint arg1, nint arg2) { }
+    private static void sub_4063f9(string arg1, nint arg2) { }
+
+    private static bool FUN_00406542_TryResolvePath(string pathAnsi, out string resolvedPath)
     {
-        // Entspricht memset(ptr, value, size) in C
-        for (int i = 0; i < size; i++)
+        if (string.IsNullOrWhiteSpace(pathAnsi))
         {
-            Marshal.WriteByte(ptr, i, value);
+            resolvedPath = string.Empty;
+            return false;
+        }
+
+        resolvedPath = Path.GetFullPath(pathAnsi);
+        return File.Exists(resolvedPath);
+    }
+
+    private static void FUN_00406542_WriteAnsiZ(nint dest, string text, int maxBytesIncludingNull)
+    {
+        if (maxBytesIncludingNull <= 1)
+        {
+            return;
+        }
+
+        byte[] bytes = Encoding.ASCII.GetBytes(text ?? string.Empty);
+
+        int count = bytes.Length;
+        if (count > maxBytesIncludingNull - 1)
+        {
+            count = maxBytesIncludingNull - 1;
+        }
+
+        Marshal.Copy(bytes, 0, (IntPtr)dest, count);
+        Marshal.WriteByte((IntPtr)(dest + count), 0);
+    }
+
+    private static bool FUN_00406542(string pathAnsi, nint param_2)
+    {
+
+        if (!FUN_00406542_TryResolvePath(pathAnsi, out string resolved))
+        {
+            return false;
+        }
+
+        FUN_00406542_WriteAnsiZ(param_2, resolved, 260);
+        return true;
+    }
+
+
+    private static void sub_405ac8(int arg) { }
+    private static int sub_4791a6(nint arg) { return 0; }
+    private static uint sub_478d16(nint arg) { return 0; }
+    private static uint sub_478d27(nint arg) { return 0; }
+    private static uint sub_478d5e(nint arg) { return 0; }
+    private static nint sub_478ced(nint arg) { return IntPtr.Zero; }
+    private static nint LoadIconA(uint hInstance, int lpIconName) { return IntPtr.Zero; }
+    private static nint SendMessageA(nint hWnd, uint Msg, int wParam, nint lParam) { return IntPtr.Zero; }
+    private static void sub_4016ee(nint arg) { }
+    private static void sub_478b53(nint arg) { }
+    private static void sub_401750(nint arg) { }
+    private static void sub_40471f(nint arg1, nint arg2, int arg3) { }
+    private static void sub_404aac(nint arg1, int arg2) { }
+    private static void sub_403524(nint arg) { }
+    private static void GetCurrentDirectoryA(int nBufferLength, nint lpBuffer) { }
+
+    private static void FUN_004e5c30_StrCat(StringBuilder dest, string src)
+    {
+        ArgumentNullException.ThrowIfNull(dest);
+
+        if (!string.IsNullOrEmpty(src))
+        {
+            dest.Append(src);
         }
     }
 
-    private static IntPtr sub_4e5ddd(int size)
+    private static nint FindAnsiStringEnd(nint str)
+    {
+        nint p = str;
+
+        // Align p
+        while ((p.ToInt64() & 3) != 0)
+        {
+            if (Marshal.ReadByte(p) == 0)
+            {
+                return p;
+            }
+            p += 1;
+        }
+
+        while (true)
+        {
+            uint word = unchecked((uint)Marshal.ReadInt32(p));
+
+            if ((((word ^ 0xFFFFFFFFu) ^ (word + 0x7EFEFEFFu)) & 0x81010100u) != 0u)
+            {
+                if ((word & 0x000000FFu) == 0u) return p;
+                if ((word & 0x0000FF00u) == 0u) return p + 1;
+                if ((word & 0x00FF0000u) == 0u) return p + 2;
+                if ((word & 0xFF000000u) == 0u) return p + 3;
+            }
+
+            p += 4;
+        }
+    }
+    private static void sub_403932(nint arg1, int arg2) { }
+    private static void sub_4e167d(nint arg1, string arg2, int arg3, int arg4, nint arg5) { }
+    private static nint sub_402761() { return IntPtr.Zero; }
+    private static void sub_403e45(nint arg) { }
+    private static void sub_403e6f(nint arg1, nint arg2) { }
+    private static void sub_4e1463(nint arg1, nint arg2) { }
+
+    private static nint sub_4e5ddd(int size)
     {
         return Marshal.AllocHGlobal(size);
     }
@@ -1561,29 +1556,29 @@ class Program
         return true;
     }
 
-    private static int sub_4799d8(IntPtr data)
+    private static int sub_4799d8(nint data)
     {
         // Implementierung der Funktion
         return 1;
     }
 
-    private static int sub_40241e(IntPtr data)
+    private static int sub_40241e(nint data)
     {
         // Implementierung der Funktion
         return 0;
     }
 
-    private static void sub_4023ae(IntPtr data)
+    private static void sub_4023ae(nint data)
     {
         // Implementierung der Funktion
     }
 
-    private static void sub_4015fb(IntPtr data)
+    private static void sub_4015fb(nint data)
     {
         // Implementierung der Funktion
     }
 
-    private static void sub_4e5e48(IntPtr data)
+    private static void sub_4e5e48(nint data)
     {
         Marshal.FreeHGlobal(data);
     }
