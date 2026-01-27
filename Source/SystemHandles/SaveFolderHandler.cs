@@ -83,7 +83,7 @@ namespace OpenVikings.SystemHandles
             return defaultConfigurations;
         }
 
-        private static Dictionary<string, string> ParseINIFile(string filePath)
+        internal static Dictionary<string, string> ParseINIFile(string filePath)
         {
             Dictionary<string, string> optionSetting = [];
 
