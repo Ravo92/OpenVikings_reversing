@@ -1,17 +1,16 @@
 ﻿namespace OpenVikings.SystemHandles
 {
-    internal class PathHandler
+    internal static class PathHandler
     {
-        // sub_4ec0ea(
-        internal static string GetGamePath()
-        {
-            return Environment.ProcessPath!;
-        }
+#if DEBUG
+        internal static readonly string GameRoot = Directory.GetCurrentDirectory();
+#else
+        internal static readonly string GameRoot = Path.GetDirectoryName(Environment.ProcessPath!)!; 
+#endif
 
-        // sub_4065e2(; logs, Saves, mapshots, screenshots, UserMaps, 
         internal static string GetFolderPath(string folderName)
         {
-            return Path.Combine(Environment.ProcessPath!, folderName);
+            return Path.Combine(GameRoot, folderName);
         }
     }
 }
