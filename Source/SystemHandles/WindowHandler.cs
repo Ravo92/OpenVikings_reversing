@@ -9,6 +9,8 @@ namespace OpenVikings.SystemHandles
         private const int WS_VISIBLE = 268435456;
         private const int SW_SHOW = 5;
 
+        private static Thread _windowThread;
+
         [DllImport("user32.dll", EntryPoint = "RegisterClassW", SetLastError = true, CharSet = CharSet.Ansi)]
         private static extern ushort RegisterClassW([In] ref WNDCLASS lpWndClass);
 
@@ -54,6 +56,8 @@ namespace OpenVikings.SystemHandles
         private static extern bool UnregisterClassW(string lpClassName, IntPtr hInstance);
 
         private delegate IntPtr WndProcDelegate(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam);
+
+        private static WndProcDelegate _wndProcDelegate;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct WNDCLASS
@@ -104,6 +108,21 @@ namespace OpenVikings.SystemHandles
             return DefWindowProcA(hWnd, uMsg, wParam, lParam);
         }
 
+        internal static void CreateFullScreenWindowAsync(string windowName)
+        {
+            Thread thread = new(() =>
+            {
+                CreateFullScreenWindow(windowName);
+            })
+            {
+                IsBackground = true
+            };
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+
+            _windowThread = thread;
+        }
+
         internal static void CreateFullScreenWindow(string windowName)
         {
             Debug.WriteLine("Creating full screen window...");
@@ -114,12 +133,12 @@ namespace OpenVikings.SystemHandles
             bool unregistered = UnregisterClassW(ConstantsHandler.WINDOW_CLASS_NAME, hInstance);
             Debug.WriteLine($"UnregisterClassW: unregistered={unregistered}, last error={Marshal.GetLastWin32Error()}");
 
-            WndProcDelegate wndProcDelegate = new(WindowProc);
+            _wndProcDelegate = new(WindowProc);
 
             WNDCLASS wndClass = new()
             {
                 style = 0,
-                lpfnWndProc = Marshal.GetFunctionPointerForDelegate(wndProcDelegate),
+                lpfnWndProc = Marshal.GetFunctionPointerForDelegate(_wndProcDelegate),
                 cbClsExtra = 0,
                 cbWndExtra = 0,
                 hInstance = hInstance,
@@ -131,11 +150,9 @@ namespace OpenVikings.SystemHandles
             };
 
             Debug.WriteLine("Registering window class...");
-            ushort classAtom = RegisterClassW(ref wndClass);
-            if (classAtom == 0)
+            if (RegisterClassW(ref wndClass) == 0)
             {
-                int errorCode = Marshal.GetLastWin32Error();
-                Debug.WriteLine($"Failed to register window class. Error code: {errorCode}");
+                Debug.WriteLine($"Failed to register window class. Error code: {Marshal.GetLastWin32Error()}");
                 return;
             }
 

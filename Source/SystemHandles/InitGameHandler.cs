@@ -7,7 +7,7 @@
             SaveFolderHandler saveFolderHandler = new();
             saveFolderHandler.InitializeConfigurations();
 
-            WindowHandler.CreateFullScreenWindow("Weltwunder");
+            WindowHandler.CreateFullScreenWindowAsync("Weltwunder");
         }
     }
 }
