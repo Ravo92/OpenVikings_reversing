@@ -174,7 +174,7 @@ class Program
 
     private delegate void FunctionDelegate();
 
-    // sub_401000(
+    // sub_401000()
     [STAThread]
     static void Main(string[] args)
     {
