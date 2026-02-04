@@ -9,7 +9,7 @@ class Program
     [STAThread]
     static async Task Main(string[] args)
     {
-        ArgumentHandler argumentHandler = new ArgumentHandler();
+        ArgumentHandler argumentHandler = new();
         argumentHandler.HandleArguments(args);
 
         if (!InitGameHandler.TryEnsureSingleInstanceOrExit("weltwunder"))

@@ -5,13 +5,12 @@ namespace OpenVikings.SystemHandles
 {
     internal static partial class WindowHandler
     {
-        private const int WS_OVERLAPPEDWINDOW = 0x00CF0000;
+        #region Win32 constants
+
         private const int WS_VISIBLE = 0x10000000;
         private const int WS_POPUP = unchecked((int)0x80000000);
 
         private const int CW_USEDEFAULT = unchecked((int)0x80000000);
-
-        private static readonly IntPtr BLACK_BRUSH = (IntPtr)4;
 
         private const int SW_SHOW = 5;
 
@@ -25,6 +24,35 @@ namespace OpenVikings.SystemHandles
         private const int SM_CXSCREEN = 0;
         private const int SM_CYSCREEN = 1;
 
+        private const int WM_PAINT = 0x000F;
+        private const int WM_ERASEBKGND = 0x0014;
+
+        private const uint SRCCOPY = 0x00CC0020;
+
+        private const uint IMAGE_BITMAP = 0;
+        private const uint LR_LOADFROMFILE = 0x0010;
+        private const uint LR_CREATEDIBSECTION = 0x2000;
+
+        private const uint WM_SETCURSOR = 0x0020;
+        private const uint WM_CLOSE = 0x0010;
+        private const uint WM_DESTROY = 0x0002;
+
+        private const int WM_LBUTTONDOWN = 0x0201;
+        private const int WM_RBUTTONDOWN = 0x0204;
+        private const int WM_MBUTTONDOWN = 0x0207;
+        private const int WM_XBUTTONDOWN = 0x020B;
+
+        private const int WM_KEYDOWN = 0x0100;
+        private const int WM_SYSKEYDOWN = 0x0104;
+
+        private static readonly IntPtr BLACK_BRUSH = (IntPtr)4;
+
+        internal static event Action? AnyUserInput;
+
+        #endregion
+
+        #region State
+
         private static nint clientCursorHandle = 0;
 
         private static Thread? windowThread;
@@ -33,9 +61,15 @@ namespace OpenVikings.SystemHandles
 
         internal static IntPtr WindowHandle => windowHandle;
 
+        private static readonly Lock _bitmapLock = new();
+        private static IntPtr _hBitmap = IntPtr.Zero;
+        private static bool _stretchToClient = true;
+
+        #endregion
+
         private delegate IntPtr WndProcDelegate(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam);
 
-        #region Structs and DLLs
+        #region Structs
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         private struct WNDCLASSW
@@ -78,6 +112,35 @@ namespace OpenVikings.SystemHandles
             public int Right;
             public int Bottom;
         }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PAINTSTRUCT
+        {
+            public IntPtr hdc;
+            public bool fErase;
+            public RECT rcPaint;
+            public bool fRestore;
+            public bool fIncUpdate;
+
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
+            public byte[] rgbReserved;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct BITMAP
+        {
+            public int bmType;
+            public int bmWidth;
+            public int bmHeight;
+            public int bmWidthBytes;
+            public ushort bmPlanes;
+            public ushort bmBitsPixel;
+            public IntPtr bmBits;
+        }
+
+        #endregion
+
+        #region user32 / gdi32 imports
 
         [DllImport("user32.dll", EntryPoint = "RegisterClassW", SetLastError = true, CharSet = CharSet.Unicode)]
         private static extern ushort RegisterClassW([In] ref WNDCLASSW lpWndClass);
@@ -147,48 +210,85 @@ namespace OpenVikings.SystemHandles
         [DllImport("user32.dll")]
         private static extern nint SetCursor(nint hCursor);
 
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr BeginPaint(IntPtr hWnd, out PAINTSTRUCT lpPaint);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool EndPaint(IntPtr hWnd, ref PAINTSTRUCT lpPaint);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool InvalidateRect(IntPtr hWnd, IntPtr lpRect, bool bErase);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
+
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern IntPtr LoadImageW(IntPtr hInst, string lpszName, uint uType, int cxDesired, int cyDesired, uint fuLoad);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        private static extern bool DeleteObject(IntPtr hObject);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        private static extern bool DeleteDC(IntPtr hdc);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        private static extern IntPtr SelectObject(IntPtr hdc, IntPtr h);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        private static extern bool BitBlt(IntPtr hdcDest, int xDest, int yDest, int wDest, int hDest,
+            IntPtr hdcSrc, int xSrc, int ySrc, uint rop);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        private static extern bool StretchBlt(IntPtr hdcDest, int xDest, int yDest, int wDest, int hDest,
+            IntPtr hdcSrc, int xSrc, int ySrc, int wSrc, int hSrc, uint rop);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        private static extern int GetObjectW(IntPtr h, int c, out BITMAP pv);
+
         #endregion
 
-        private static IntPtr WindowProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam)
-        {
-            switch (uMsg)
-            {
-                case 0x0020: // WM_SETCURSOR
-                    {
-                        // lParam low-word: HitTest (HTCLIENT = 1)
-                        int hitTest = unchecked((short)((long)lParam & 0xFFFF));
-                        if (hitTest == 1 && clientCursorHandle != 0) // HTCLIENT
-                        {
-                            SetCursor(clientCursorHandle);
-                            return (IntPtr)1;
-                        }
-
-                        break;
-                    }
-
-                case 0x0010: // WM_CLOSE
-                    _ = DestroyWindow(hWnd);
-                    return IntPtr.Zero;
-
-                case 0x0002: // WM_DESTROY
-                    PostQuitMessage(0);
-                    return IntPtr.Zero;
-            }
-
-            return DefWindowProcW(hWnd, uMsg, wParam, lParam);
-        }
+        #region Public API
 
         internal static void SetClientCursor(nint hCursor)
         {
             clientCursorHandle = hCursor;
         }
 
-        /// <summary>
-        /// Creates a windowed window whose client area has the exact specified width and height (e.g. 1280x720).
-        /// </summary>
+        internal static void SetBitmapFromFile(string path, bool stretchToClient)
+        {
+            IntPtr hBmp = LoadImageW(IntPtr.Zero, path, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE | LR_CREATEDIBSECTION);
+            if (hBmp == IntPtr.Zero)
+            {
+                int err = Marshal.GetLastWin32Error();
+                throw new InvalidOperationException("LoadImageW failed. GetLastError=" + err);
+            }
+
+            lock (_bitmapLock)
+            {
+                DeleteCurrentBitmap_NoLock();
+                _hBitmap = hBmp;
+                _stretchToClient = stretchToClient;
+            }
+
+            RequestRepaint();
+        }
+
+        internal static void ClearBitmap()
+        {
+            lock (_bitmapLock)
+            {
+                DeleteCurrentBitmap_NoLock();
+            }
+
+            RequestRepaint();
+        }
+
         internal static Task<IntPtr> CreateWindowedWindowAsync(string windowName, int clientWidth, int clientHeight, bool centerOnScreen)
         {
-            TaskCompletionSource<IntPtr> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource<IntPtr> tcs = new TaskCompletionSource<IntPtr>(TaskCreationOptions.RunContinuationsAsynchronously);
 
             Thread thread = new(() =>
             {
@@ -213,9 +313,10 @@ namespace OpenVikings.SystemHandles
 #pragma warning disable CA1416
             thread.SetApartmentState(ApartmentState.STA);
 #pragma warning restore CA1416
-            thread.Start();
 
+            thread.Start();
             windowThread = thread;
+
             return tcs.Task;
         }
 
@@ -224,12 +325,175 @@ namespace OpenVikings.SystemHandles
             return CreateWindowedWindowAsync(windowName, 1280, 720, true);
         }
 
+        #endregion
+
+        #region Window procedure
+
+        private static IntPtr WindowProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam)
+        {
+            if (uMsg == WM_ERASEBKGND)
+            {
+                return (IntPtr)1;
+            }
+
+            if (uMsg == WM_PAINT)
+            {
+                return OnPaint(hWnd);
+            }
+
+            // Any click / key press => trigger event
+            if (uMsg == WM_LBUTTONDOWN ||
+                uMsg == WM_RBUTTONDOWN ||
+                uMsg == WM_MBUTTONDOWN ||
+                uMsg == WM_XBUTTONDOWN ||
+                uMsg == WM_KEYDOWN ||
+                uMsg == WM_SYSKEYDOWN)
+            {
+                RaiseAnyUserInput();
+            }
+
+            if (uMsg == WM_SETCURSOR)
+            {
+                int hitTest = unchecked((short)((long)lParam & 0xFFFF));
+                if (hitTest == 1 && clientCursorHandle != 0) // HTCLIENT
+                {
+                    SetCursor(clientCursorHandle);
+                    return (IntPtr)1;
+                }
+            }
+
+            if (uMsg == WM_CLOSE)
+            {
+                _ = DestroyWindow(hWnd);
+                return IntPtr.Zero;
+            }
+
+            if (uMsg == WM_DESTROY)
+            {
+                PostQuitMessage(0);
+                return IntPtr.Zero;
+            }
+
+            return DefWindowProcW(hWnd, uMsg, wParam, lParam);
+        }
+
+
+        #endregion
+
+        #region Paint
+
+        private static IntPtr OnPaint(IntPtr hWnd)
+        {
+            IntPtr hdc = BeginPaint(hWnd, out PAINTSTRUCT ps);
+
+            try
+            {
+                IntPtr hBmp;
+                bool stretch;
+
+                lock (_bitmapLock)
+                {
+                    hBmp = _hBitmap;
+                    stretch = _stretchToClient;
+                }
+
+                if (hBmp == IntPtr.Zero)
+                {
+                    return IntPtr.Zero;
+                }
+
+                if (!TryGetBitmapInfo(hBmp, out BITMAP bmp))
+                {
+                    return IntPtr.Zero;
+                }
+
+                if (!GetClientRect(hWnd, out RECT clientRect))
+                {
+                    return IntPtr.Zero;
+                }
+
+                int dstW = clientRect.Right - clientRect.Left;
+                int dstH = clientRect.Bottom - clientRect.Top;
+
+                DrawBitmapToHdc(hdc, hBmp, bmp.bmWidth, bmp.bmHeight, dstW, dstH, stretch);
+            }
+            finally
+            {
+                _ = EndPaint(hWnd, ref ps);
+            }
+
+            return IntPtr.Zero;
+        }
+
+        private static bool TryGetBitmapInfo(IntPtr hBmp, out BITMAP bmp)
+        {
+            int size = Marshal.SizeOf<BITMAP>();
+            int got = GetObjectW(hBmp, size, out bmp);
+            return got != 0;
+        }
+
+        private static void DrawBitmapToHdc(IntPtr targetHdc, IntPtr hBmp, int srcW, int srcH, int dstW, int dstH, bool stretch)
+        {
+            IntPtr memDc = CreateCompatibleDC(targetHdc);
+            if (memDc == IntPtr.Zero)
+            {
+                return;
+            }
+
+            try
+            {
+                IntPtr old = SelectObject(memDc, hBmp);
+
+                try
+                {
+                    if (stretch)
+                    {
+                        _ = StretchBlt(targetHdc, 0, 0, dstW, dstH, memDc, 0, 0, srcW, srcH, SRCCOPY);
+                    }
+                    else
+                    {
+                        int w = Math.Min(dstW, srcW);
+                        int h = Math.Min(dstH, srcH);
+                        _ = BitBlt(targetHdc, 0, 0, w, h, memDc, 0, 0, SRCCOPY);
+                    }
+                }
+                finally
+                {
+                    _ = SelectObject(memDc, old);
+                }
+            }
+            finally
+            {
+                _ = DeleteDC(memDc);
+            }
+        }
+
+        private static void DeleteCurrentBitmap_NoLock()
+        {
+            if (_hBitmap != IntPtr.Zero)
+            {
+                _ = DeleteObject(_hBitmap);
+                _hBitmap = IntPtr.Zero;
+            }
+        }
+
+        private static void RequestRepaint()
+        {
+            if (windowHandle != IntPtr.Zero)
+            {
+                _ = InvalidateRect(windowHandle, IntPtr.Zero, false);
+            }
+        }
+
+        #endregion
+
+        #region Create window / message loop
+
         private static IntPtr CreateWindowedWindowOnThisThread(string windowName, int clientWidth, int clientHeight, bool centerOnScreen)
         {
             Debug.WriteLine("Creating windowed window...");
 
             IntPtr hInstance = GetModuleHandleW(null);
-            Debug.WriteLine($"GetModuleHandleW: hInstance={hInstance}");
 
             _ = UnregisterClassW(ConstantsHandler.WINDOW_CLASS_NAME, hInstance);
 
@@ -253,7 +517,7 @@ namespace OpenVikings.SystemHandles
             if (atom == 0)
             {
                 int err = Marshal.GetLastWin32Error();
-                throw new InvalidOperationException($"RegisterClassW failed. GetLastError={err}");
+                throw new InvalidOperationException("RegisterClassW failed. GetLastError=" + err);
             }
 
             WindowSize windowSize = ComputeOuterSizeForClient(clientWidth, clientHeight, WS_POPUP | WS_VISIBLE, 0);
@@ -281,7 +545,7 @@ namespace OpenVikings.SystemHandles
             if (hWnd == IntPtr.Zero)
             {
                 int err = Marshal.GetLastWin32Error();
-                throw new InvalidOperationException($"CreateWindowExW failed. GetLastError={err}");
+                throw new InvalidOperationException("CreateWindowExW failed. GetLastError=" + err);
             }
 
             _ = ShowWindow(hWnd, SW_SHOW);
@@ -289,7 +553,7 @@ namespace OpenVikings.SystemHandles
 
             ApplyClientSize(hWnd, clientWidth, clientHeight, centerOnScreen);
 
-            Debug.WriteLine($"Window created: hWnd={hWnd}");
+            Debug.WriteLine("Window created: hWnd=" + hWnd);
             return hWnd;
         }
 
@@ -303,14 +567,13 @@ namespace OpenVikings.SystemHandles
 
                 if (ret == 0)
                 {
-                    Debug.WriteLine("WM_QUIT received, leaving loop.");
                     break;
                 }
 
                 if (ret == -1)
                 {
                     int err = Marshal.GetLastWin32Error();
-                    Debug.WriteLine($"GetMessageW failed. GetLastError={err}");
+                    Debug.WriteLine("GetMessageW failed. GetLastError=" + err);
                     break;
                 }
 
@@ -321,12 +584,7 @@ namespace OpenVikings.SystemHandles
 
         private static void ApplyClientSize(IntPtr hWnd, int clientWidth, int clientHeight, bool centerOnScreen)
         {
-            if (hWnd == IntPtr.Zero)
-            {
-                return;
-            }
-
-            if (clientWidth <= 0 || clientHeight <= 0)
+            if (hWnd == IntPtr.Zero || clientWidth <= 0 || clientHeight <= 0)
             {
                 return;
             }
@@ -386,6 +644,7 @@ namespace OpenVikings.SystemHandles
 
             int w = rect.Right - rect.Left;
             int h = rect.Bottom - rect.Top;
+
             return new WindowSize(w, h);
         }
 
@@ -400,5 +659,33 @@ namespace OpenVikings.SystemHandles
                 Height = height;
             }
         }
+
+        internal static bool TryGetClientSize(out int width, out int height)
+        {
+            width = 0;
+            height = 0;
+
+            if (windowHandle == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            if (!GetClientRect(windowHandle, out RECT rect))
+            {
+                return false;
+            }
+
+            width = rect.Right - rect.Left;
+            height = rect.Bottom - rect.Top;
+
+            return width > 0 && height > 0;
+        }
+
+        private static void RaiseAnyUserInput()
+        {
+            AnyUserInput?.Invoke();
+        }
+
+        #endregion
     }
 }

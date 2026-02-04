@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "OpenVikings": {
+      "commandName": "Project",
+      "workingDirectory": "E:\\Steam\\steamapps\\common\\Cultures 8th Wonder"
+    }
+  }
+}

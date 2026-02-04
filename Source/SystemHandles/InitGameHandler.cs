@@ -235,6 +235,8 @@ namespace OpenVikings.SystemHandles
             InitializeDmSystemAndVolume();
 
             engineContext.State = 2;
+
+            IntroOutroHandler.ShowIntroBmpAndArmSkip();
         }
 
         internal static void ApplyVideoMode(EngineContext engineContext)

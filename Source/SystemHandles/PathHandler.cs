@@ -12,5 +12,10 @@
         {
             return Path.Combine(GameRoot, folderName);
         }
+
+        internal static string GetDataXPath()
+        {
+            return Path.Combine(GameRoot, "DataX");
+        }
     }
 }
