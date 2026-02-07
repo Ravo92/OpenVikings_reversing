@@ -23,7 +23,7 @@ namespace OpenVikings.SystemHandles
             { "gui_mouse_software", "0" }
         };
 
-        private bool SetSaveFolder()
+        internal bool SetSaveFolder()
         {
             try
             {

@@ -1,5 +1,7 @@
-﻿using System.Diagnostics;
+﻿using OpenVikings.Engine;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
+using static OpenVikings.Engine.InputEvents;
 
 namespace OpenVikings.SystemHandles
 {
@@ -13,6 +15,8 @@ namespace OpenVikings.SystemHandles
         private const int CW_USEDEFAULT = unchecked((int)0x80000000);
 
         private const int SW_SHOW = 5;
+
+        private const uint PM_REMOVE = 0x0001;
 
         private const int GWL_STYLE = -16;
         private const int GWL_EXSTYLE = -20;
@@ -36,13 +40,21 @@ namespace OpenVikings.SystemHandles
         private const uint WM_SETCURSOR = 0x0020;
         private const uint WM_CLOSE = 0x0010;
         private const uint WM_DESTROY = 0x0002;
+        private const uint WM_QUIT = 0x0012;
 
-        private const int WM_LBUTTONDOWN = 0x0201;
-        private const int WM_RBUTTONDOWN = 0x0204;
-        private const int WM_MBUTTONDOWN = 0x0207;
-        private const int WM_XBUTTONDOWN = 0x020B;
+        private const uint WM_MOUSEMOVE = 0x0200;
+        private const uint WM_LBUTTONDOWN = 0x0201;
+        private const uint WM_LBUTTONUP = 0x0202;
+        private const uint WM_RBUTTONDOWN = 0x0204;
+        private const uint WM_RBUTTONUP = 0x0205;
+        private const uint WM_MBUTTONDOWN = 0x0207;
+        private const uint WM_MBUTTONUP = 0x0208;
+        private const uint WM_MOUSEWHEEL = 0x020A;
 
-        private const int WM_KEYDOWN = 0x0100;
+        private const uint WM_KEYDOWN = 0x0100;
+        private const uint WM_KEYUP = 0x0101;
+        private const uint WM_CHAR = 0x0102;
+
         private const int WM_SYSKEYDOWN = 0x0104;
 
         private static readonly IntPtr BLACK_BRUSH = (IntPtr)4;
@@ -56,10 +68,12 @@ namespace OpenVikings.SystemHandles
         private static nint clientCursorHandle = 0;
 
         private static Thread? windowThread;
+        private static int windowThreadId;
         private static IntPtr windowHandle = IntPtr.Zero;
         private static WndProcDelegate? wndProcDelegate;
 
         internal static IntPtr WindowHandle => windowHandle;
+        private static InputQueue? _inputQueue;
 
         private static readonly Lock _bitmapLock = new();
         private static IntPtr _hBitmap = IntPtr.Zero;
@@ -179,9 +193,6 @@ namespace OpenVikings.SystemHandles
         [DllImport("user32.dll", EntryPoint = "DefWindowProcW", SetLastError = true, CharSet = CharSet.Unicode)]
         private static extern IntPtr DefWindowProcW(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam);
 
-        [DllImport("user32.dll", EntryPoint = "GetMessageW", SetLastError = true)]
-        private static extern int GetMessageW(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
-
         [DllImport("user32.dll", EntryPoint = "TranslateMessage", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool TranslateMessage(ref MSG lpMsg);
@@ -248,6 +259,14 @@ namespace OpenVikings.SystemHandles
         [DllImport("gdi32.dll", SetLastError = true)]
         private static extern int GetObjectW(IntPtr h, int c, out BITMAP pv);
 
+        [DllImport("user32.dll", EntryPoint = "PeekMessageW", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool PeekMessageW(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax, uint wRemoveMsg);
+
+        [DllImport("user32.dll", EntryPoint = "WaitMessage", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool WaitMessage();
+
         #endregion
 
         #region Public API
@@ -288,7 +307,7 @@ namespace OpenVikings.SystemHandles
 
         internal static Task<IntPtr> CreateWindowedWindowAsync(string windowName, int clientWidth, int clientHeight, bool centerOnScreen)
         {
-            TaskCompletionSource<IntPtr> tcs = new TaskCompletionSource<IntPtr>(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource<IntPtr> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
             Thread thread = new(() =>
             {
@@ -341,11 +360,16 @@ namespace OpenVikings.SystemHandles
                 return OnPaint(hWnd);
             }
 
+            // Forward input messages into the engine input queue (if attached).
+            if (_inputQueue != null)
+            {
+                HandleInputMessage(uMsg, wParam, lParam);
+            }
+
             // Any click / key press => trigger event
             if (uMsg == WM_LBUTTONDOWN ||
                 uMsg == WM_RBUTTONDOWN ||
                 uMsg == WM_MBUTTONDOWN ||
-                uMsg == WM_XBUTTONDOWN ||
                 uMsg == WM_KEYDOWN ||
                 uMsg == WM_SYSKEYDOWN)
             {
@@ -370,13 +394,15 @@ namespace OpenVikings.SystemHandles
 
             if (uMsg == WM_DESTROY)
             {
+                // Signal the engine that a quit was requested, then post WM_QUIT.
+                _inputQueue?.RequestQuit();
+
                 PostQuitMessage(0);
                 return IntPtr.Zero;
             }
 
             return DefWindowProcW(hWnd, uMsg, wParam, lParam);
         }
-
 
         #endregion
 
@@ -493,6 +519,8 @@ namespace OpenVikings.SystemHandles
         {
             Debug.WriteLine("Creating windowed window...");
 
+            windowThreadId = Environment.CurrentManagedThreadId;
+
             IntPtr hInstance = GetModuleHandleW(null);
 
             _ = UnregisterClassW(ConstantsHandler.WINDOW_CLASS_NAME, hInstance);
@@ -557,28 +585,109 @@ namespace OpenVikings.SystemHandles
             return hWnd;
         }
 
+        private static void HandleInputMessage(uint msg, IntPtr wParam, IntPtr lParam)
+        {
+            // Mouse buttons.
+            if (msg == WM_LBUTTONDOWN) { _inputQueue!.Enqueue(new InputEvent(InputEventType.MouseButton, (int)MouseButton.Left, (int)ButtonAction.Down, 0)); return; }
+            if (msg == WM_LBUTTONUP) { _inputQueue!.Enqueue(new InputEvent(InputEventType.MouseButton, (int)MouseButton.Left, (int)ButtonAction.Up, 0)); return; }
+
+            if (msg == WM_RBUTTONDOWN) { _inputQueue!.Enqueue(new InputEvent(InputEventType.MouseButton, (int)MouseButton.Right, (int)ButtonAction.Down, 0)); return; }
+            if (msg == WM_RBUTTONUP) { _inputQueue!.Enqueue(new InputEvent(InputEventType.MouseButton, (int)MouseButton.Right, (int)ButtonAction.Up, 0)); return; }
+
+            if (msg == WM_MBUTTONDOWN) { _inputQueue!.Enqueue(new InputEvent(InputEventType.MouseButton, (int)MouseButton.Middle, (int)ButtonAction.Down, 0)); return; }
+            if (msg == WM_MBUTTONUP) { _inputQueue!.Enqueue(new InputEvent(InputEventType.MouseButton, (int)MouseButton.Middle, (int)ButtonAction.Up, 0)); return; }
+
+            // Mouse wheel.
+            if (msg == WM_MOUSEWHEEL)
+            {
+                // High word of wParam contains wheel delta (typically 120 per notch).
+                int delta = (short)((long)wParam >> 16);
+                int steps = delta / 120;
+
+                if (steps != 0)
+                {
+                    _inputQueue!.Enqueue(new InputEvent(InputEventType.MouseWheel, steps, 0, 0));
+                }
+
+                return;
+            }
+
+            // Mouse move (currently absolute client coordinates; switch to delta if needed).
+            if (msg == WM_MOUSEMOVE)
+            {
+                int x = (short)((long)lParam & 0xFFFF);
+                int y = (short)(((long)lParam >> 16) & 0xFFFF);
+
+                _inputQueue!.Enqueue(new InputEvent(InputEventType.MouseMove, x, y, 0));
+                return;
+            }
+
+            // Key up/down.
+            if (msg == WM_KEYDOWN)
+            {
+                _inputQueue!.Enqueue(new InputEvent(InputEventType.Key, (int)wParam, 1, 0));
+                return;
+            }
+
+            if (msg == WM_KEYUP)
+            {
+                _inputQueue!.Enqueue(new InputEvent(InputEventType.Key, (int)wParam, 0, 0));
+                return;
+            }
+
+            // Text input.
+            if (msg == WM_CHAR)
+            {
+                _inputQueue!.Enqueue(new InputEvent(InputEventType.Text, (int)wParam, 0, 0));
+                return;
+            }
+        }
+
+
         private static void RunMessageLoopOnThisThread()
         {
-            Debug.WriteLine("Entering message loop...");
-
+            // Idle-friendly loop: pump queued messages, then wait for new ones.
             while (true)
             {
-                int ret = GetMessageW(out MSG msg, IntPtr.Zero, 0, 0);
-
-                if (ret == 0)
+                bool ok = PumpPendingMessagesOnWindowThread();
+                if (!ok)
                 {
                     break;
                 }
 
-                if (ret == -1)
+                _ = WaitMessage();
+            }
+        }
+
+        internal static bool PumpPendingMessagesOnWindowThread()
+        {
+            EnsureWindowThread();
+
+            // Non-blocking message pump. Must be called on the thread that created the window.
+            while (true)
+            {
+                bool hasMessage = PeekMessageW(out MSG msg, IntPtr.Zero, 0, 0, PM_REMOVE);
+                if (!hasMessage)
                 {
-                    int err = Marshal.GetLastWin32Error();
-                    Debug.WriteLine("GetMessageW failed. GetLastError=" + err);
-                    break;
+                    return true;
+                }
+
+                if (msg.message == WM_QUIT)
+                {
+                    return false;
                 }
 
                 _ = TranslateMessage(ref msg);
                 _ = DispatchMessageW(ref msg);
+            }
+        }
+
+        private static void EnsureWindowThread()
+        {
+            int currentId = Environment.CurrentManagedThreadId;
+            if (currentId != windowThreadId)
+            {
+                throw new InvalidOperationException("Message pumping must run on the window thread.");
             }
         }
 
@@ -684,6 +793,11 @@ namespace OpenVikings.SystemHandles
         private static void RaiseAnyUserInput()
         {
             AnyUserInput?.Invoke();
+        }
+
+        internal static void AttachInputQueue(InputQueue inputQueue)
+        {
+            _inputQueue = inputQueue;
         }
 
         #endregion

@@ -6,10 +6,6 @@ namespace OpenVikings.SystemHandles
 {
     internal class InitGameHandler
     {
-        private static nint data_5697ec;
-        private static nint data_50f6a4;
-        private static nint data_50f698;
-
         private static DLLCalls.Gedx8musicdrv.IGedx8MusicDriver dmDriver = DLLCalls.Gedx8musicdrv.Gedx8musicdrvFacade.GetInterface2_Managed();
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -231,9 +227,6 @@ namespace OpenVikings.SystemHandles
 
             sub_401750(engineContext);
 
-            InitializeFxSystemIfEnabled();
-            InitializeDmSystemAndVolume();
-
             engineContext.State = 2;
 
             IntroOutroHandler.ShowIntroBmpAndArmSkip();
@@ -254,36 +247,6 @@ namespace OpenVikings.SystemHandles
             }
 
             SetWindowTextW(hWnd, "Weltwunder");
-        }
-
-        internal static void InitializeFxSystemIfEnabled()
-        {
-            sub_4e163b("fx_quality");
-            sub_404aac(data_50f6a4, sub_4e163b("fx_volume"));
-        }
-
-        internal static void InitializeDmSystemAndVolume()
-        {
-            if (sub_4e163b("music_mode") == 2)
-            {
-                sub_4e167d(data_5697ec, "music_mode", 1, 1, 0);
-            }
-
-            string dmPath = BuildDmPath();
-
-            dmDriver = DLLCalls.Gedx8musicdrv.Gedx8musicdrvFacade.GetInterface2_Managed();
-            dmDriver.SetBasePath(dmPath);
-            dmDriver.Initialize();
-
-            InitializeDmSynthesizer();
-
-            int dmVolume = sub_4e163b("dm_volume");
-            sub_403932(data_50f698, dmVolume);
-
-            if (sub_4e163b("music_mode") == 3)
-            {
-                sub_4e167d(data_5697ec, "music_mode", 1, 1, 0);
-            }
         }
 
         internal static string BuildDmPath()
