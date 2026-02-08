@@ -2,6 +2,7 @@
 
 namespace OpenVikings.Engine
 {
+    // dexterApp() in the original code. This is the main application class that runs the main loop logic.
     internal sealed class OpenVikingsApp(ITimeSource timeSource, IThreadRelaxer relaxer, IOpenVikingsMain OpenVikingsMain, IOpenVikingsDebug debug, IApplicationLifecycle lifecycle, OpenVikingsGfxSettings gfx, OpenVikingsOsState os)
     {
         private readonly ITimeSource _timeSource = timeSource ?? throw new ArgumentNullException(nameof(timeSource));
@@ -29,8 +30,8 @@ namespace OpenVikings.Engine
             }
 
             // Capture timing values BEFORE running the main logic.
-            int startTime = _timeSource.TimeMilliseconds();
-            int resetBefore = _os.TimeCheckResetMs;
+            uint startTime = _timeSource.GetMilliseconds();
+            uint resetBefore = _os.TimeCheckResetMs;
 
             // Yield/sleep briefly (matches the original RelaxThread call).
             _relaxer.Relax();
@@ -39,7 +40,7 @@ namespace OpenVikings.Engine
             _OpenVikingsMain.RunOnce();
 
             // Read callback after running main logic, because it may be updated there.
-            int callback = _gfx.CallbackTimeMs;
+            uint callback = _gfx.CallbackTimeMs;
 
             // Special callback: end application.
             if (callback == 0x7777)
@@ -56,12 +57,12 @@ namespace OpenVikings.Engine
             }
 
             // Capture timing values AFTER running the main logic.
-            int nowTime = _timeSource.TimeMilliseconds();
-            int resetAfter = _os.TimeCheckResetMs;
+            uint nowTime = _timeSource.GetMilliseconds();
+            uint resetAfter = _os.TimeCheckResetMs;
 
             // Original timing formula:
             // frameTime = (nowTime + (resetBefore - startTime)) - resetAfter
-            int frameTime = (nowTime + (resetBefore - startTime)) - resetAfter;
+            uint frameTime = (nowTime + (resetBefore - startTime)) - resetAfter;
 
             _debug.UpdateFps(frameTime);
 
@@ -74,16 +75,16 @@ namespace OpenVikings.Engine
             return true;
         }
 
-        private void WaitUntilCallbackTime(int startTime, int resetBefore, int callbackTimeMs)
+        private void WaitUntilCallbackTime(uint startTime, uint resetBefore, uint callbackTimeMs)
         {
             while (true)
             {
                 _relaxer.Relax();
 
-                int nowTime = _timeSource.TimeMilliseconds();
-                int resetAfter = _os.TimeCheckResetMs;
+                uint nowTime = _timeSource.GetMilliseconds();
+                uint resetAfter = _os.TimeCheckResetMs;
 
-                int elapsed = (nowTime + (resetBefore - startTime)) - resetAfter;
+                uint elapsed = (nowTime + (resetBefore - startTime)) - resetAfter;
 
                 if (elapsed >= callbackTimeMs)
                 {

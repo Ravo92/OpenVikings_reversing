@@ -14,7 +14,7 @@ namespace OpenVikings.Engine
             _lastReportTick = Stopwatch.GetTimestamp();
         }
 
-        public void UpdateFps(int frameTimeMs)
+        public void UpdateFps(uint frameTimeMs)
         {
             // This is only a placeholder. Can be replaced with real profiling / overlay logic.
             _frameCount++;

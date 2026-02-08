@@ -7,36 +7,40 @@ namespace OpenVikings.Engine
         private readonly ApplicationMessageProcessor _messageProcessor;
         private readonly IMasterControlProgram _masterControlProgram;
         private readonly OpenVikingsGfxSettings _gfx;
+        private readonly LogicTickDispatcher _logicTickDispatcher;
 
-        internal OpenVikingsMain(ApplicationMessageProcessor messageProcessor, IMasterControlProgram masterControlProgram, OpenVikingsGfxSettings gfx)
+        internal OpenVikingsMain(ApplicationMessageProcessor messageProcessor, IMasterControlProgram masterControlProgram, OpenVikingsGfxSettings gfx, LogicTickDispatcher logicTickDispatcher)
         {
             _messageProcessor = messageProcessor ?? throw new ArgumentNullException(nameof(messageProcessor));
             _masterControlProgram = masterControlProgram ?? throw new ArgumentNullException(nameof(masterControlProgram));
             _gfx = gfx ?? throw new ArgumentNullException(nameof(gfx));
+            _logicTickDispatcher = logicTickDispatcher;
         }
 
         public void RunOnce()
         {
-            // Legacy logic:
-            // if (DoMessages() != 0) {
-            //     if (System_Update(...) == 0) return;
-            // }
-            // ApplicationEnded();
-
+            // Mirrors: DoMessages()
             bool messagesOk = _messageProcessor.DoMessages();
 
             if (messagesOk)
             {
+                // ------------------------------------------------------------
+                // LOGIC TICK (engine type = 1)
+                // ------------------------------------------------------------
+                _logicTickDispatcher.StepOnce();
+
+                // ------------------------------------------------------------
+                // SYSTEM / STATE UPDATE
+                // ------------------------------------------------------------
                 bool continueRunning = _masterControlProgram.Update();
 
-                // Continue running (legacy System_Update returned 0 for this case).
                 if (continueRunning)
                 {
                     return;
                 }
             }
 
-            // Signal OpenVikingsApp.MainThreadTick() to end the application.
+            // Mirrors legacy exit path
             _gfx.CallbackTimeMs = 0x7777;
         }
     }

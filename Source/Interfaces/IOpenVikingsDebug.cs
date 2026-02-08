@@ -5,6 +5,6 @@
         /// <summary>
         /// Updates FPS diagnostics (or frame timing) using the given frame time in milliseconds.
         /// </summary>
-        void UpdateFps(int frameTimeMs);
+        void UpdateFps(uint frameTimeMs);
     }
 }

@@ -7,6 +7,6 @@
         /// 0x7777 => end application
         /// 0x6666 => reset FPS and return
         /// </summary>
-        public int CallbackTimeMs { get; set; }
+        public uint CallbackTimeMs { get; set; }
     }
 }

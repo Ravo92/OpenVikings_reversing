@@ -4,10 +4,10 @@ namespace OpenVikings.Engine
 {
     internal class EnvironmentTimeSource : ITimeSource
     {
-        public int TimeMilliseconds()
+        public uint GetMilliseconds()
         {
             // Environment.TickCount wraps around; this mirrors typical legacy timing behavior.
-            return Environment.TickCount;
+            return unchecked((uint)Environment.TickCount);
         }
     }
 }
