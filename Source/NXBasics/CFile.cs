@@ -776,6 +776,20 @@ namespace OpenVikings.NXBasics
             }
         }
 
+        // NXBasics::CFile::FileSystem_Tool_FileExists(char const*, bool)
+        internal static bool FileSystem_Tool_FileExists(string fileName, bool param2)
+        {
+            if (string.IsNullOrEmpty(fileName))
+            {
+                return false;
+            }
+
+            using CFile file = new(fileName, false);
+            ulong result = file.OpenForReading(param2);
+            file.Close();
+            return result != 0;
+        }
+
         internal byte[] GetResolvedPathBytesNullTerminated()
         {
             if (string.IsNullOrEmpty(_resolvedPath))

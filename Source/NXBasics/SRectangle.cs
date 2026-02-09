@@ -1,69 +1,64 @@
 ﻿namespace OpenVikings.NXBasics
 {
-    internal struct SRectangle : IEquatable<SRectangle>
+    internal struct SRectangle
     {
-        internal int X;
-        internal int Y;
+        internal int Left;
+        internal int Top;
         internal int Width;
         internal int Height;
 
-        internal SRectangle(int x, int y, int width, int height)
+        // NXBasics::SRectangle::SRectangle(int, int, int, int)
+        internal SRectangle(int left, int top, int width, int height)
         {
-            X = x;
-            Y = y;
+            Left = left;
+            Top = top;
             Width = width;
             Height = height;
         }
 
+        // NXBasics::SRectangle::SRectangle(int, int)
         internal SRectangle(int width, int height)
         {
-            X = 0;
-            Y = 0;
+            Left = 0;
+            Top = 0;
             Width = width;
             Height = height;
         }
 
+        // NXBasics::SRectangle::SRectangle(NXBasics::SRectangle const&)
         internal SRectangle(in SRectangle other)
         {
-            X = other.X;
-            Y = other.Y;
+            Left = other.Left;
+            Top = other.Top;
             Width = other.Width;
             Height = other.Height;
         }
 
+        // NXBasics::SRectangle::SRectangle(NXBasics::SPoint const&)
         internal SRectangle(in SPoint point)
         {
-            X = point.X;
-            Y = point.Y;
-
-            // 0x100000001 => Width=1, Height=1 (two packed ints)
+            Left = point.X;
+            Top = point.Y;
             Width = 1;
             Height = 1;
         }
 
-        public static bool operator ==(SRectangle left, SRectangle right)
+        // NXBasics::TEMPNAMEPLACEHOLDERVALUE(NXBasics::SRectangle const&, NXBasics::SRectangle const&)
+        public static bool operator ==(SRectangle a, SRectangle b)
         {
-            return left.X == right.X
-                && left.Y == right.Y
-                && left.Width == right.Width
-                && left.Height == right.Height;
+            return a.Left == b.Left && a.Top == b.Top && a.Width == b.Width && a.Height == b.Height;
         }
 
-        public static bool operator !=(SRectangle left, SRectangle right)
+        public static bool operator !=(SRectangle a, SRectangle b)
         {
-            return !(left == right);
-        }
-
-        public bool Equals(SRectangle other)
-        {
-            return this == other;
+            return !(a == b);
         }
 
         public override bool Equals(object? obj)
         {
-            if (obj is SRectangle rectangle)
+            if (obj is SRectangle other)
             {
-                return this == rectangle;
+                return this == other;
             }
 
             return false;
@@ -71,296 +66,323 @@
 
         public override int GetHashCode()
         {
-            return HashCode.Combine(X, Y, Width, Height);
+            return System.HashCode.Combine(Left, Top, Width, Height);
         }
 
+        // NXBasics::SRectangle::Init()
         internal void Init()
         {
-            X = 0;
-            Y = 0;
+            Left = 0;
+            Top = 0;
             Width = 0;
             Height = 0;
         }
 
-        internal void SetVariables(int x, int y, int width, int height)
+        // NXBasics::SRectangle::SetVariables(int, int, int, int)
+        internal void SetVariables(int left, int top, int width, int height)
         {
-            X = x;
-            Y = y;
+            Left = left;
+            Top = top;
             Width = width;
             Height = height;
         }
 
-        internal void MovePosition(int deltaX, int deltaY)
+        // NXBasics::SRectangle::MovePosition(int, int)
+        internal void MovePosition(int dx, int dy)
         {
-            X = X + deltaX;
-            Y = Y + deltaY;
+            Left += dx;
+            Top += dy;
         }
 
+        // NXBasics::SRectangle::BlowUpSize(int, int)
         internal void BlowUpSize(int amountX, int amountY)
         {
-            X = X - amountX;
-            Y = Y - amountY;
-            Width = Width + (amountX * 2);
-            Height = Height + (amountY * 2);
+            Left -= amountX;
+            Top -= amountY;
+            Width += amountX * 2;
+            Height += amountY * 2;
         }
 
-        internal void PlaceInside(in SRectangle outer)
+        // NXBasics::SRectangle::PlaceInside(NXBasics::SRectangle const&)
+        internal void PlaceInside(in SRectangle bounds)
         {
-            int outerWidth = outer.Width;
-            int thisWidth = Width;
-
-            if (outerWidth < thisWidth)
+            int maxW = bounds.Width;
+            int w = Width;
+            if (maxW < w)
             {
-                Width = outerWidth;
-                thisWidth = outerWidth;
+                Width = maxW;
+                w = maxW;
             }
 
-            int outerHeight = outer.Height;
-            int thisHeight = Height;
-
-            if (outerHeight < thisHeight)
+            int maxH = bounds.Height;
+            int h = Height;
+            if (maxH < h)
             {
-                Height = outerHeight;
-                thisHeight = outerHeight;
+                Height = maxH;
+                h = maxH;
             }
 
-            int outerX = outer.X;
-            int thisX = X;
-
-            if (thisX < outerX)
+            int left = bounds.Left;
+            int x = Left;
+            if (x < left)
             {
-                X = outerX;
-                thisX = outerX;
+                Left = left;
+                x = left;
             }
 
-            int outerY = outer.Y;
-            int thisY = Y;
-
-            if (thisY < outerY)
+            int top = bounds.Top;
+            int y = Top;
+            if (y < top)
             {
-                Y = outerY;
-                thisY = outerY;
+                Top = top;
+                y = top;
             }
 
-            if (outer.X + outer.Width < thisX + thisWidth)
+            if (bounds.Width + bounds.Left < x + w)
             {
-                X = (outer.X + outer.Width) - thisWidth;
+                Left = (bounds.Width + bounds.Left) - w;
             }
 
-            if (outer.Y + outer.Height < thisY + thisHeight)
+            if (bounds.Height + bounds.Top < y + h)
             {
-                Y = (outer.Y + outer.Height) - thisHeight;
+                Top = (bounds.Height + bounds.Top) - h;
             }
         }
 
-        internal void CutInside(in SRectangle outer)
+        // NXBasics::SRectangle::CutInside(NXBasics::SRectangle const&)
+        internal void CutInside(in SRectangle clip)
         {
-            int thisX = X;
-            int outerX = outer.X;
+            int x = Left;
+            int clipX = clip.Left;
 
-            if (thisX < outerX)
+            if (x < clipX)
             {
-                Width = Width + (thisX - outerX);
-                X = outerX;
-                thisX = outerX;
+                Width = Width + (x - clipX);
+                Left = clipX;
+                x = clipX;
             }
 
-            int thisY = Y;
-            int outerY = outer.Y;
+            int y = Top;
+            int clipY = clip.Top;
 
-            if (thisY < outerY)
+            if (y < clipY)
             {
-                Height = Height + (thisY - outerY);
-                Y = outerY;
-                thisY = outerY;
+                Height = Height + (y - clipY);
+                Top = clipY;
+                y = clipY;
             }
 
-            if (outer.X + outer.Width < Width + thisX)
+            if (clip.Width + clip.Left < Width + x)
             {
-                Width = (outer.X + outer.Width) - thisX;
+                Width = (clip.Width + clip.Left) - x;
             }
 
-            if (outer.Y + outer.Height < Height + thisY)
+            if (clip.Height + clip.Top < Height + y)
             {
-                Height = (outer.Y + outer.Height) - thisY;
+                Height = (clip.Height + clip.Top) - y;
             }
         }
 
-        internal bool CutInsideX(in SRectangle outer)
+        // NXBasics::SRectangle::CutInsideX(NXBasics::SRectangle const&)
+        internal bool CutInsideX(in SRectangle clip)
         {
-            int originalX = X;
-            int originalY = Y;
-            int originalWidth = Width;
-            int originalHeight = Height;
+            int originalLeft = Left;
+            int originalTop = Top;
 
-            int thisX = X;
-            int outerX = outer.X;
+            int x = originalLeft;
+            int clipX = clip.Left;
+            int newLeft = x;
+            bool changed = false;
 
-            if (thisX < outerX)
+            if (x < clipX)
             {
-                Width = Width + (thisX - outerX);
-                X = outerX;
-                thisX = outerX;
+                Width = Width + (x - clipX);
+                Left = clipX;
+                newLeft = clipX;
+                changed = true;
             }
 
-            int thisY = Y;
-            int outerY = outer.Y;
+            int y = originalTop;
+            int clipY = clip.Top;
+            int newTop = y;
 
-            if (thisY < outerY)
+            if (y < clipY)
             {
-                Height = Height + (thisY - outerY);
-                Y = outerY;
-                thisY = outerY;
+                Height = Height + (y - clipY);
+                Top = clipY;
+                newTop = clipY;
+                changed = true;
             }
 
-            int rightOuter = outer.X + outer.Width;
-            if (rightOuter < Width + thisX)
+            int w = Width;
+            int clipRight = clip.Left + clip.Width;
+            if (clipRight < w + newLeft)
             {
-                Width = rightOuter - thisX;
+                Width = clipRight - newLeft;
+                changed = true;
             }
 
-            int bottomOuter = outer.Y + outer.Height;
-            if (bottomOuter < Height + thisY)
+            int h = Height;
+            int clipBottom = clip.Top + clip.Height;
+            if (clipBottom < h + newTop)
             {
-                Height = bottomOuter - thisY;
+                Height = clipBottom - newTop;
+                changed = true;
             }
 
-            return X != originalX
-                || Y != originalY
-                || Width != originalWidth
-                || Height != originalHeight;
+            return changed;
         }
 
+        // NXBasics::SRectangle::CombineWith(NXBasics::SRectangle const&)
         internal void CombineWith(in SRectangle other)
         {
-            // X axis (ported 1:1 from RE logic)
-            int otherX = other.X;
-            int thisX = X;
+            int otherLeft = other.Left;
+            int left = Left;
 
-            int thisWidth;
-            int otherXLocal;
+            int width;
+            int anchorLeft;
 
-            if (thisX - otherX == 0 || thisX < otherX)
+            if (left - otherLeft == 0 || left < otherLeft)
             {
-                thisWidth = Width;
-                otherXLocal = otherX;
+                width = Width;
+                anchorLeft = otherLeft;
             }
             else
             {
-                thisWidth = (thisX - otherX) + Width;
-                Width = thisWidth;
-                X = otherX;
-
-                otherXLocal = otherX;
-                thisX = otherX;
+                width = (left - otherLeft) + Width;
+                Width = width;
+                Left = otherLeft;
+                anchorLeft = otherLeft;
+                left = otherLeft;
             }
 
-            if (thisWidth + thisX < otherXLocal + other.Width)
+            if (width + left < anchorLeft + other.Width)
             {
-                Width = (otherXLocal + other.Width) - thisX;
+                Width = (anchorLeft + other.Width) - left;
             }
 
-            // Y axis (ported 1:1 from RE logic)
-            int otherY = other.Y;
-            int thisY = Y;
+            int otherTop = other.Top;
+            int top = Top;
 
-            if (thisY - otherY == 0 || thisY < otherY)
+            int height;
+            int anchorTop;
+
+            if (top - otherTop == 0 || top < otherTop)
             {
-                thisWidth = Height;
-                otherXLocal = otherY;
+                height = Height;
+                anchorTop = otherTop;
             }
             else
             {
-                thisWidth = (thisY - otherY) + Height;
-                Height = thisWidth;
-                Y = otherY;
-
-                otherXLocal = otherY;
-                thisY = otherY;
+                height = (top - otherTop) + Height;
+                Height = height;
+                Top = otherTop;
+                anchorTop = otherTop;
+                top = otherTop;
             }
 
-            if (thisWidth + thisY < otherXLocal + other.Height)
+            if (height + top < anchorTop + other.Height)
             {
-                Height = (otherXLocal + other.Height) - thisY;
+                Height = (anchorTop + other.Height) - top;
             }
         }
 
-        internal bool IsTouching(in SRectangle other)
+        // NXBasics::SRectangle::IsTouching(NXBasics::SRectangle const&) const
+        internal int IsTouching(in SRectangle other)
         {
-            if (other.X < (Width + X) && X < (other.X + other.Width))
+            if (other.Left < Width + Left && Left < other.Left + other.Width)
             {
-                int thisY = Y;
-                if (other.Y < (Height + thisY))
+                int y = Top;
+                if (other.Top < Height + y && y < other.Top + other.Height)
                 {
-                    return thisY < (other.Y + other.Height);
+                    return 1;
                 }
             }
 
-            return false;
+            return 0;
         }
 
-        internal bool IsEqual(in SRectangle other)
+        // NXBasics::SRectangle::IsEqual(NXBasics::SRectangle const&) const
+        internal int IsEqual(in SRectangle other)
         {
-            return X == other.X
-                && Y == other.Y
-                && Width == other.Width
-                && Height == other.Height;
-        }
-
-        internal bool IsSizeEqual(in SRectangle other)
-        {
-            return Width == other.Width
-                && Height == other.Height;
-        }
-
-        internal bool IsPositionEqual(in SRectangle other)
-        {
-            return X == other.X
-                && Y == other.Y;
-        }
-
-        internal bool IsInside(in SRectangle outer)
-        {
-            if (outer.X <= X)
+            if (other.Left == Left && other.Top == Top && other.Width == Width)
             {
-                if (outer.Y <= Y)
+                return other.Height == Height ? 1 : 0;
+            }
+
+            return 0;
+        }
+
+        // NXBasics::SRectangle::IsSizeEqual(NXBasics::SRectangle const&) const
+        internal int IsSizeEqual(in SRectangle other)
+        {
+            if (other.Width == Width)
+            {
+                return other.Height == Height ? 1 : 0;
+            }
+
+            return 0;
+        }
+
+        // NXBasics::SRectangle::IsPositionEqual(NXBasics::SRectangle const&) const
+        internal int IsPositionEqual(in SRectangle other)
+        {
+            if (other.Left == Left)
+            {
+                return other.Top == Top ? 1 : 0;
+            }
+
+            return 0;
+        }
+
+        // NXBasics::SRectangle::IsInside(NXBasics::SRectangle const&) const
+        internal int IsInside(in SRectangle bounds)
+        {
+            if (bounds.Left <= Left)
+            {
+                if (bounds.Top <= Top &&
+                    Left + Width - 1 <= bounds.Left + bounds.Width - 1)
                 {
-                    if (X + Width - 1 <= outer.X + outer.Width - 1)
-                    {
-                        int bottomMinus1 = Height + Y - 1;
-                        return bottomMinus1 <= outer.Y + outer.Height - 1;
-                    }
+                    int bottom = Height + Top - 1;
+                    return bottom <= bounds.Top + bounds.Height - 1 ? 1 : 0;
                 }
             }
 
-            return false;
+            return 0;
         }
 
+        // NXBasics::SRectangle::MakeSizeWordAlligned()
         internal void MakeSizeWordAlligned()
         {
-            Width = unchecked((int)((uint)Width & 0xFFFEu));
-            Height = unchecked((int)((uint)Height & 0xFFFEu));
+            Width = (int)((uint)Width & 0xFFFEu);
+            Height = (int)((uint)Height & 0xFFFEu);
         }
 
+        // NXBasics::SRectangle::MakeSizeLongAlligned()
         internal void MakeSizeLongAlligned()
         {
-            Width = unchecked((int)((uint)Width & 0xFFFCu));
-            Height = unchecked((int)((uint)Height & 0xFFFCu));
+            Width = (int)((uint)Width & 0xFFFCu);
+            Height = (int)((uint)Height & 0xFFFCu);
         }
 
+        // NXBasics::SRectangle::Validate()
         internal void Validate()
         {
-            if (Width < 0)
+            int w = Width;
+            if (w < 0)
             {
-                X = X + Width;
-                Width = -Width;
+                Left += w;
+                Width = -w;
             }
 
-            if (Height < 0)
+            int h = Height;
+            if (-1 < h)
             {
-                Y = Y + Height;
-                Height = -Height;
+                return;
             }
+
+            Top += h;
+            Height = -h;
         }
     }
 }

@@ -386,47 +386,56 @@
             return -1;
         }
 
-        internal static int LowStringCompare(byte[] a, string b, int maxCount)
+        internal static bool StringCompare(string a, string b, byte caseSensitiveFlag)
         {
-            if (a == null && b == null)
+            bool caseInsensitive = caseSensitiveFlag == 0;
+
+            int index = 0;
+            while (true)
             {
-                return 0;
-            }
+                char ca = index < a.Length ? a[index] : '\0';
+                char cb = index < b.Length ? b[index] : '\0';
 
-            if (a == null)
-            {
-                return -1;
-            }
-
-            if (b == null)
-            {
-                return 1;
-            }
-
-            for (int i = 0; i < maxCount; i++)
-            {
-                byte ba = i < a.Length ? a[i] : (byte)0;
-                char cb = i < b.Length ? b[i] : '\0';
-                byte bb = cb <= 0x7F ? (byte)cb : (byte)'?';
-
-                ba = ToLowerAscii(ba);
-                bb = ToLowerAscii(bb);
-
-                if (ba != bb)
+                if (caseInsensitive)
                 {
-                    return ba < bb ? -1 : 1;
+                    char na = NormalizeAsciiLetterToLower(ca);
+                    char nb = NormalizeAsciiLetterToLower(cb);
+
+                    if (na != nb)
+                    {
+                        return false;
+                    }
+                }
+                else
+                {
+                    if (ca != cb)
+                    {
+                        return false;
+                    }
                 }
 
-                if (ba == 0)
+                if (ca == '\0')
                 {
-                    return 0;
+                    return true;
                 }
-            }
 
-            return 0;
+                index++;
+            }
         }
 
         // ---------- helpers ----------
+
+        private static char NormalizeAsciiLetterToLower(char c)
+        {
+            // Original logic: if c is 'A'..'Z' then add ' ' (0x20) -> make it lowercase.
+            // Otherwise keep as-is.
+            if (c >= 'A' && c <= 'Z')
+            {
+                return (char)(c + 0x20);
+            }
+
+            return c;
+        }
 
         private static bool IsAsciiUpper(char c)
         {

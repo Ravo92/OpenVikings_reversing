@@ -1,6 +1,6 @@
 ﻿namespace OpenVikings.NXBasics
 {
-    internal sealed class CListBase<T>
+    internal sealed class CListBase<T> : IEnumerable<T> where T : class
     {
         private readonly LinkedList<T> _list;
 
@@ -19,34 +19,24 @@
             _list.AddLast(item);
         }
 
-        internal bool Remove(T item)
+        // Mirrors NXBasics::CListBase::l_Base_RemoveElement
+        internal void L_Base_RemoveElement(T item)
         {
-            return _list.Remove(item);
+            _list.Remove(item);
         }
 
-        internal bool Contains(T item)
+        // Mirrors NXBasics::CListBase::l_Base_GetStartElement
+        internal T? L_Base_GetStartElement()
         {
-            return _list.Contains(item);
+            return _list.First?.Value;
         }
 
-        internal T GetStartOrDefault()
+        // Mirrors NXBasics::CListBase::l_Base_RemoveFromEnd
+        internal T? L_Base_RemoveFromEnd()
         {
-            if (_list.First == null)
-            {
-                return default;
-            }
-
-            return _list.First.Value;
-        }
-
-        internal T RemoveFromEndOrDefault()
-        {
-            // Mirrors NXBasics::CListBase::l_Base_RemoveFromEnd
-            // Returns default(T) if empty, otherwise removes and returns the last element.
-
             if (_list.Last == null)
             {
-                return default;
+                return null;
             }
 
             LinkedListNode<T> node = _list.Last;
@@ -55,9 +45,21 @@
             return value;
         }
 
-        internal void Clear()
+        internal void DeleteAllElements()
         {
+            // Important: only clears the list. Deletion of objects is handled elsewhere in managed code.
             _list.Clear();
+        }
+
+        // Enables correct iteration without inventing list APIs
+        public IEnumerator<T> GetEnumerator()
+        {
+            return _list.GetEnumerator();
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
+        {
+            return GetEnumerator();
         }
     }
 }

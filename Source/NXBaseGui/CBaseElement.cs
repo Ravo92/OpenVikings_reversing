@@ -1,70 +1,429 @@
 ﻿using OpenVikings.NXBasics;
 
-namespace OpenVikings.NXBaseGui
+namespace OpenVikings.NXBaseGui;
+
+[Flags]
+internal enum BaseElementFlags : uint
 {
-    internal class CBaseElement
+    None = 0,
+
+    // Observed in decompile / required by Desktop logic
+    KeyboardFocusRootCandidate = 0x00000004,
+    DefaultMessageHandler = 0x00000080,
+    AddedToDesktop = 0x00000800,
+
+    HasSubElements = 0x00000040,
+    CloseWindowOnRelease = 0x00000008,
+
+    MouseInside = 0x00000100,
+    Hidden = 0x00000200,
+    Disabled = 0x00000400,
+
+    // Masks observed in your earlier mapping
+    CanBeActivatedMask = 0x00000401,
+    CanBePressedMask = 0x00000402
+}
+
+internal enum BaseElementState : int
+{
+    Inactive = 0,
+    Active = 1,
+    Pressed = 2
+}
+
+internal class CBaseElement
+{
+    private static uint sUniqueIdCounter;
+
+    // this + 0x08.. (rectangle)
+    private SRectangle _rect;
+
+    // this + 0x18 (state)
+    internal BaseElementState _state;
+
+    // this + 0x1C (flags)
+    private BaseElementFlags _flags;
+
+    // this + 0x1D (byte flags; decompile uses bit 0x02 for hide)
+    private byte _elementStateFlags;
+
+    // this + 0x20 (message mask/type)
+    private TXGuiMessageTypes _messageType;
+
+    // this + 0x28 in decompile: parent element pointer (root chain)
+    private CBaseElement? _parentElement;
+
+    // Convenience only: owner window (used for CloseWindowOnRelease and some desktop logic)
+    private CBaseWindow? _parentWindow;
+
+    // this + 0x38 (unique id)
+    private uint _uniqueId;
+
+    internal ref SRectangle RectRef
     {
-        internal SRectangle Rect { get; private set; }
-        internal int LayerOrType { get; private set; }
-        internal int ElementId { get; private set; }
+        get { return ref _rect; }
+    }
 
-        internal uint Flags { get; private set; }
-        internal byte StateFlags { get; set; }
+    internal ref readonly SRectangle Rect
+    {
+        get { return ref _rect; }
+    }
 
-        internal bool Hidden { get; private set; }
+    internal BaseElementFlags Flags
+    {
+        get { return _flags; }
+        set { _flags = value; }
+    }
 
-        protected CBaseElement(SRectangle rect, int layerOrType, int elementId)
+    internal byte ElementStateFlags
+    {
+        get { return _elementStateFlags; }
+        set { _elementStateFlags = value; }
+    }
+
+    internal BaseElementState State
+    {
+        get { return _state; }
+    }
+
+    internal uint UniqueId
+    {
+        get { return _uniqueId; }
+    }
+
+    internal CBaseElement? ParentElement
+    {
+        get { return _parentElement; }
+    }
+
+    internal CBaseWindow? ParentWindow
+    {
+        get { return _parentWindow; }
+    }
+
+    internal uint MessageMask
+    {
+        get { return _messageType.Value; }
+    }
+
+    public CBaseElement(in SRectangle rect, uint flags, TXGuiMessageTypes messageType)
+    {
+        L_BE_ConstructElement(in rect, flags, messageType);
+    }
+
+    // NXBaseGui::CBaseElement::L_BE_ConstructElement(NXBasics::SRectangle const&, unsigned int, NXBaseGui::TXGuiMessageTypes)
+    internal void L_BE_ConstructElement(in SRectangle rect, uint flags, TXGuiMessageTypes messageType)
+    {
+        L_BE_InitElementVars();
+
+        _rect = rect;
+        _flags = (BaseElementFlags)ComputeCtorFlags(flags);
+        _messageType = messageType;
+
+        _uniqueId = sUniqueIdCounter;
+        sUniqueIdCounter++;
+    }
+
+    // NXBaseGui::CBaseElement::~CBaseElement()
+    internal void L_BE_DestructElement()
+    {
+        L_BE_InitElementVars();
+    }
+
+    // vtable+8 equivalent
+    internal virtual void DisposeLikeOriginal()
+    {
+        L_BE_DestructElement();
+    }
+
+    // NXBaseGui::CBaseElement::L_BE_InitElementVars()
+    internal void L_BE_InitElementVars()
+    {
+        _rect = default;
+        _state = BaseElementState.Inactive;
+        _flags = BaseElementFlags.None;
+        _elementStateFlags = 0;
+        _messageType = default;
+
+        _parentElement = null;
+        _parentWindow = null;
+
+        _uniqueId = 0;
+    }
+
+    internal void SetParentElement(CBaseElement? parentElement)
+    {
+        _parentElement = parentElement;
+    }
+
+    internal void SetParentWindow(CBaseWindow? parentWindow)
+    {
+        _parentWindow = parentWindow;
+    }
+
+    // NXBaseGui::CBaseElement::XGui_BE_Element_Draw(NXBasics::CBitmap&, NXBasics::SRectangle const&)
+    internal virtual void XGui_BE_Element_Draw(CBitmap target, in SRectangle clipRect)
+    {
+        // Intentionally empty
+    }
+
+    // NXBaseGui::CBaseElement::XGui_BE_Element_Activate(NXBasics::SPoint const&)
+    internal virtual void XGui_BE_Element_Activate(in SPoint point)
+    {
+        if (_state != BaseElementState.Active)
         {
-            Rect = rect;
-            LayerOrType = layerOrType;
-            ElementId = elementId;
+            _state = BaseElementState.Active;
+        }
+    }
 
-            Flags = 0;
-            Hidden = false;
+    // NXBaseGui::CBaseElement::XGui_BE_Element_DeActivate()
+    internal virtual void XGui_BE_Element_DeActivate()
+    {
+        if (_state != BaseElementState.Inactive)
+        {
+            _state = BaseElementState.Inactive;
+        }
+    }
+
+    // NXBaseGui::CBaseElement::XGui_BE_Element_ButtonPressed(NXBasics::SPoint const&)
+    internal virtual bool XGui_BE_Element_ButtonPressed(in SPoint point)
+    {
+        if (_state != BaseElementState.Pressed)
+        {
+            _state = BaseElementState.Pressed;
         }
 
-        internal void SetRect(SRectangle rect)
+        return true;
+    }
+
+    // NXBaseGui::CBaseElement::XGui_BE_Element_ButtonReleased()
+    internal virtual bool XGui_BE_Element_ButtonReleased()
+    {
+        if (_state == BaseElementState.Pressed)
         {
-            Rect = rect;
+            if (((uint)_flags & (uint)BaseElementFlags.CloseWindowOnRelease) != 0 && _parentWindow != null)
+            {
+                CBaseWindow.BW_CloseWindow(_parentWindow);
+            }
+
+            _state = BaseElementState.Active;
+            XGui_BE_Element_DoPressedAction();
+            return true;
         }
 
-        internal void Hide()
+        if (_state == BaseElementState.Active)
         {
-            Hidden = true;
+            _state = BaseElementState.Inactive;
         }
 
-        internal bool HasFlag(uint flag)
+        return false;
+    }
+
+    // NXBaseGui::CBaseElement::BE_Internal_Element_MouseEnteredArea()
+    internal void BE_Internal_Element_MouseEnteredArea()
+    {
+        uint prev = (uint)_flags;
+        _flags = (BaseElementFlags)(prev | (uint)BaseElementFlags.MouseInside);
+    }
+
+    // byte at offset 0x1D, used as bitfield in the original
+    internal byte GetInternalByte1D()
+    {
+        return _elementStateFlags;
+    }
+
+    // "InWindowBit" is bit 0x08 (matches decompile: & 0xF7 clears it)
+    internal bool HasInWindowBit()
+    {
+        return (_elementStateFlags & 0x08) != 0;
+    }
+
+    internal void SetInWindowBit()
+    {
+        _elementStateFlags = (byte)(_elementStateFlags | 0x08);
+    }
+
+    // NXBaseGui::CBaseElement::ClearInWindowBit()
+    internal void ClearInWindowBit()
+    {
+        _elementStateFlags = (byte)(_elementStateFlags & 0xF7);
+    }
+
+    internal SRectangle GetRectangle()
+    {
+        return _rect;
+    }
+
+    // NXBaseGui::CBaseElement::BE_CanBePressed() const
+    internal bool BE_CanBePressed()
+    {
+        return ((uint)_flags & (uint)BaseElementFlags.CanBePressedMask) == 2;
+    }
+
+    // NXBaseGui::CBaseElement::BE_CanBeActivated() const
+    internal bool BE_CanBeActivated()
+    {
+        return ((uint)_flags & (uint)BaseElementFlags.CanBeActivatedMask) == 1;
+    }
+
+    // NXBaseGui::CBaseElement::BE_Internal_Element_MouseLeftArea()
+    internal void BE_Internal_Element_MouseLeftArea()
+    {
+        _elementStateFlags = (byte)(_elementStateFlags & 0xFE);
+
+        if (_state == BaseElementState.Pressed)
         {
-            return (Flags & flag) != 0;
+            _state = BaseElementState.Active;
+        }
+    }
+
+    // NXBaseGui::CBaseElement::XGui_BE_Message_Handle(...)
+    internal virtual ulong XGui_BE_Message_Handle(TXGuiMessageTypes messageType, uint a, uint b, uint c, uint d)
+    {
+        return 0;
+    }
+
+    // NXBaseGui::CBaseElement::XGui_BE_Element_ParentToLocalPosition(NXBasics::SPoint&) const
+    internal void XGui_BE_Element_ParentToLocalPosition(ref SPoint point)
+    {
+        point.X -= _rect.Left;
+        point.Y -= _rect.Top;
+    }
+
+    // NXBaseGui::CBaseElement::L_BE_GlobalToLocalCoordinates(NXBasics::SPoint&)
+    internal void L_BE_GlobalToLocalCoordinates(ref SPoint point)
+    {
+        int globalX = point.X;
+        int globalY = point.Y;
+
+        CBaseElement? parentElement = _parentElement;
+        if (parentElement != null)
+        {
+            SRectangle parentRect = parentElement._rect;
+            globalX -= parentRect.Left;
+            globalY -= parentRect.Top;
+        }
+        else if (_parentWindow != null)
+        {
+            // Fallback: only if no parent element exists
+            SRectangle parentRect = _parentWindow.Rect;
+            globalX -= parentRect.Left;
+            globalY -= parentRect.Top;
         }
 
-        internal void SetFlag(uint flag)
+        point.X = globalX - _rect.Left;
+        point.Y = globalY - _rect.Top;
+    }
+
+    // NXBaseGui::CBaseElement::BE_Internal_Element_Hide()
+    internal void BE_Internal_Element_Hide()
+    {
+        if (((uint)_flags & (uint)BaseElementFlags.Hidden) == 0)
         {
-            Flags |= flag;
+            CDesktop.sTheObjectPtr?.L_Element_DoNotUse(this);
+
+            _flags = (BaseElementFlags)((uint)_flags | (uint)BaseElementFlags.Hidden);
+
+            // Decompile uses (byte +0x1D) bit 0x02 as "hidden" marker in many checks.
+            _elementStateFlags = (byte)(_elementStateFlags | 0x02);
+        }
+    }
+
+    // NXBaseGui::CBaseElement::BE_Internal_Element_UnHide()
+    internal void BE_Internal_Element_UnHide()
+    {
+        if (((uint)_flags & (uint)BaseElementFlags.Hidden) != 0)
+        {
+            _flags = (BaseElementFlags)((uint)_flags & 0xfffffdffU);
+            _elementStateFlags = (byte)(_elementStateFlags & 0xFD);
+        }
+    }
+
+    // NXBaseGui::CBaseElement::BE_Internal_Element_Disable()
+    internal void BE_Internal_Element_Disable()
+    {
+        if (((uint)_flags & (uint)BaseElementFlags.Disabled) == 0)
+        {
+            CDesktop.sTheObjectPtr?.L_Element_DoNotUse(this);
+            _flags = (BaseElementFlags)((uint)_flags | (uint)BaseElementFlags.Disabled);
+        }
+    }
+
+    // NXBaseGui::CBaseElement::BE_Internal_Element_Enable()
+    internal void BE_Internal_Element_Enable()
+    {
+        if (((uint)_flags & (uint)BaseElementFlags.Disabled) != 0)
+        {
+            _flags = (BaseElementFlags)((uint)_flags & 0xfffffbffU);
+        }
+    }
+
+    // NXBaseGui::CBaseElement::XGui_BE_Element_FindElementOnPosition(NXBasics::SPoint const&, bool)
+    internal virtual CBaseElement? XGui_BE_Element_FindElementOnPosition(in SPoint point, bool forcePick)
+    {
+        if ((((uint)_flags & (uint)BaseElementFlags.CanBeActivatedMask) == 1 || forcePick) &&
+            (((uint)_flags & (uint)BaseElementFlags.Hidden) == 0))
+        {
+            if (XGui_BE_Element_HitTest(in point))
+            {
+                return this;
+            }
         }
 
-        internal void ClearFlag(uint flag)
-        {
-            Flags &= ~flag;
-        }
+        return null;
+    }
 
-        protected internal virtual void OnAddedToDesktop()
-        {
-        }
+    // NXBaseGui::CBaseElement::XGui_BE_HasSubElements() const
+    internal bool XGui_BE_HasSubElements()
+    {
+        return (((uint)_flags & (uint)BaseElementFlags.HasSubElements) >> 6) != 0;
+    }
 
-        // Mirrors the virtual call at vtable + 0x08 in CDesktop::Element_Delete.
-        protected internal virtual void OnDeletedFromDesktop()
-        {
-        }
+    // NXBaseGui::CBaseElement::XGui_BE_Hide_CanBeHidden()
+    internal virtual bool XGui_BE_Hide_CanBeHidden()
+    {
+        return true;
+    }
 
-        // Mirrors the virtual call at vtable + 0x30 in CDesktop::Element_Remove when desktop slot 0x1F8 equals this element.
-        protected internal virtual void OnDesktopSlot1F8Cleared()
-        {
-        }
+    // NXBaseGui::CBaseElement::XGui_BE_Element_GetRealActiveElementPtr()
+    internal virtual CBaseElement XGui_BE_Element_GetRealActiveElementPtr()
+    {
+        return this;
+    }
 
-        // Mirrors CBaseElement::BE_Internal_Element_MouseLeftArea(this).
-        protected internal virtual void OnMouseLeftAreaInternal()
-        {
-        }
+    // NXBaseGui::CBaseElement::XGui_BE_ToolTip_AtOnce()
+    internal virtual ulong XGui_BE_ToolTip_AtOnce()
+    {
+        return 0;
+    }
+
+    // NXBaseGui::CBaseElement::XGui_BE_Element_DoPressedAction()
+    internal virtual void XGui_BE_Element_DoPressedAction()
+    {
+        // Intentionally empty
+    }
+
+    // vtable +0x68 in decompile: called when element is added to desktop
+    internal virtual void XGui_BE_Element_AddedToDesktop()
+    {
+        // Intentionally empty
+    }
+
+    protected virtual bool XGui_BE_Element_HitTest(in SPoint point)
+    {
+        int left = _rect.Left;
+        int top = _rect.Top;
+
+        return point.X >= left &&
+               point.X < left + _rect.Width &&
+               point.Y >= top &&
+               point.Y < top + _rect.Height;
+    }
+
+    private static uint ComputeCtorFlags(uint flags)
+    {
+        // Decompile: 0x21 - ((flags & 2) == 0) | flags
+        uint baseValue = (flags & 2U) == 0 ? 0x20U : 0x21U;
+        return baseValue | flags;
     }
 }

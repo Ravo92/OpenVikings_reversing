@@ -500,8 +500,6 @@ namespace OpenVikings.NXBasics
 
                         i++;
                     }
-
-                    currentX += runLen;
                 }
 
                 // If we stopped because we hit end-of-row, terminate.
@@ -604,7 +602,7 @@ namespace OpenVikings.NXBasics
 
             // Cropped bitmaps covering bounds.
             // Keep the exact ctor/factory you already have; this line is the only place that depends on it.
-            CBitmap croppedA = new CBitmap(bitmapA, in bounds);
+            CBitmap croppedA = new(bitmapA, in bounds);
             CBitmap croppedB = new CBitmap(bitmapB, in bounds);
 
             try
@@ -1279,7 +1277,7 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            SRectangle clipped = new SRectangle(in bobRect);
+            SRectangle clipped = new(in bobRect);
             bool didCut = clipped.CutInsideX(targetRect);
 
             if (!didCut &&

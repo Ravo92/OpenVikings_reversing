@@ -1,94 +1,108 @@
-﻿using OpenVikings.NXBasics;
-using OpenVikings.NXBaseGui;
+﻿using OpenVikings.NXBaseGui;
+using OpenVikings.NXBasics;
 
 namespace OpenVikings.NC2GuiToolsBase
 {
     internal sealed class CGuiBaseDataManager : IDisposable
     {
-        internal static CGuiBaseDataManager? sTheObjectPtr;
+        // RE: sTheObjectPtr = this;
+        internal static CGuiBaseDataManager sTheObjectPtr;
 
-        // Fonts (RE: mStaticVars is actually the "font08" pointer)
-        internal static CFont? Font08;
-        internal static CFont? Font10;
-        internal static CFont? Font12;
-        internal static CFont? FontDebug;
+        // ===== Static "globals" from the dump (renamed to meaningful fields) =====
+
+        // Fonts
+        internal static CFont sFont08;         // mStaticVars in dump (first assignment)
+        internal static CFont sFont10;         // DAT_1003a4440
+        internal static CFont sFont12;         // DAT_1003a4448
+        internal static CFont sFontDebug;      // DAT_1003a4450
 
         // Font palettes
-        internal static CPalette? PaletteFontWhite;
-        internal static CPalette? PaletteFontDimmed;
-        internal static CPalette? PaletteFontRed;
-        internal static CPalette? PaletteFontDark;
+        internal static CPalette sPalFontWhite;   // DAT_1003a4458
+        internal static CPalette sPalFontDimmed;  // DAT_1003a4460
+        internal static CPalette sPalFontRed;     // DAT_1003a4468
+        internal static CPalette sPalFontDark;    // DAT_1003a4470
 
-        // Window bob + other palettes
-        internal static object? GuiWindowBobBmd; // type unknown in snippet; keep as object for now
-        internal static CPalette? PaletteFrame;
-        internal static CPalette? PaletteBgNormal;
-        internal static CPalette? PalettePapyrus;
-        internal static CPalette? PaletteBarHitpoints;
-        internal static CPalette? PaletteBarStandart;
-        internal static CPalette? PaletteBarDisabled;
-        internal static CPalette? PaletteIconsLeft;
-        internal static CPalette? PaletteContext;
+        // GUI bobs + palettes
+        internal static object sGuiWindowBobs;                          // DAT_1003a4478 (type unknown from snippet)
+        internal static CPalette sPalFrame;        // DAT_1003a4480
+        internal static CPalette sPalBgNormal;     // DAT_1003a4488
+        internal static CPalette sPalPapyrus;      // DAT_1003a4490
+        internal static CPalette sPalBarHitpoints; // DAT_1003a4498
+        internal static CPalette sPalBarStandard;  // DAT_1003a44a0
+        internal static CPalette sPalBarDisabled;  // DAT_1003a44a8
+        internal static CPalette sPalIconsLeft;    // DAT_1003a44b0
+        internal static CPalette sPalContext;      // DAT_1003a44b8
 
-        // Dynamic data flag + bitmaps (0x30 block in RE)
-        private static bool _dynamicLoaded;
-        internal static CBitmap? Bg;
-        internal static CBitmap? BgButton;
-        internal static CBitmap? BgSelected;
-        internal static CBitmap? BgButtonHilite;
-        internal static CBitmap? BgHeadline;
+        // Dynamic data flag + dynamic bitmaps (loaded by DynamicData_Load)
+        internal static byte sDynamicDataLoaded;                         // DAT_1003a44c0 (0/1)
+        internal static CBitmap sBmpBg;             // DAT_1003a44c8
+        internal static CBitmap sBmpBgButton;       // DAT_1003a44d0
+        internal static CBitmap sBmpBgSelected;     // DAT_1003a44d8
+        internal static CBitmap sBmpBgButtonHilite; // DAT_1003a44e0
+        internal static CBitmap sBmpBgHeadline;     // DAT_1003a44e8
 
         private bool _disposed;
 
+        // NC2GuiToolsBase::CGuiBaseDataManager::CGuiBaseDataManager()
         internal CGuiBaseDataManager()
         {
             sTheObjectPtr = this;
 
-            // RE does a few memsets over global blocks; in C# we explicitly initialize the statics.
-            Font08 = NXBasicsApi.XB_Storable_LoadObject<CFont>("data\\gui\\fonts\\font08.fnt");
-            Font10 = NXBasicsApi.XB_Storable_LoadObject<CFont>("data\\gui\\fonts\\font10.fnt");
-            Font12 = NXBasicsApi.XB_Storable_LoadObject<CFont>("data\\gui\\fonts\\font12.fnt");
-            FontDebug = NXBasicsApi.XB_Storable_LoadObject<CFont>("data\\gui\\fonts\\fontdebug.fnt");
+            // DexterMemory::MemorySet(this,'\0',1);
+            // In managed code there is nothing meaningful to zero out here; state is tracked via fields.
 
-            // *(undefined4 *)(Font10 + 0x10) = 0xffffffff;
-            Font10?.SpaceAdjust = -1;
+            // DexterMemory::MemorySet(&mStaticVars,'\0',0xb8);
+            ResetStaticState();
 
-            // Property "font_space_small" changes spacing rules.
-            bool fontSpaceSmall = NMasterPropertyManager.CPropertyManager.sTheObjectPtr
-                .Property_DoesExists("font_space_small");
+            // Load fonts
+            sFont08 = (CFont)XB_Storable_LoadObject("data\\gui\\fonts\\font08.fnt");
+            sFont10 = (CFont)XB_Storable_LoadObject("data\\gui\\fonts\\font10.fnt");
+            sFont12 = (CFont)XB_Storable_LoadObject("data\\gui\\fonts\\font12.fnt");
+            sFontDebug = (CFont)XB_Storable_LoadObject("data\\gui\\fonts\\fontdebug.fnt");
 
+            // *(undefined4 *)(DAT_1003a4440 + 0x10) = 0xffffffff;
+            // This is a field write inside CFont (offset +0x10). It needs a real CFont API.
+            // If CFont already exposes this, wire it here. Otherwise keep as TODO.
+            TrySetFontSpaceValue(sFont10, unchecked((int)0xFFFFFFFF));
+
+            // Property_DoesExists(..., "font_space_small")
+            bool fontSpaceSmall = NMasterPropertyManager.CPropertyManager.Property_DoesExists(OpenVikings.NMasterPropertyManager.CPropertyManager.sTheObjectPtr, "font_space_small");
             if (fontSpaceSmall)
             {
-                if (Font08 != null) { Font08.SpaceAdjust = -1; }
-                if (Font10 != null) { Font10.SpaceAdjust = -2; }
-                if (Font12 != null) { Font12.SpaceAdjust = -2; }
+                TrySetFontSpaceValue(sFont08, unchecked((int)0xFFFFFFFF));
+                TrySetFontSpaceValue(sFont10, unchecked((int)0xFFFFFFFE));
+                TrySetFontSpaceValue(sFont12, unchecked((int)0xFFFFFFFE));
             }
 
-            PaletteFontWhite = NXBasicsApi.XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\font_white.pcx");
-            PaletteFontDimmed = NXBasicsApi.XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\font_dimmed.pcx");
-            PaletteFontRed = NXBasicsApi.XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\font_red.pcx");
-            PaletteFontDark = NXBasicsApi.XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\font_dark.pcx");
+            // Load font palettes
+            sPalFontWhite = (CPalette)XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\font_white.pcx");
+            sPalFontDimmed = (CPalette)XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\font_dimmed.pcx");
+            sPalFontRed = (CPalette)XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\font_red.pcx");
+            sPalFontDark = (CPalette)XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\font_dark.pcx");
 
-            // All fonts get the "white" font palette initially.
-            if (Font08 != null && PaletteFontWhite != null) { Font08.SetPalettePtr(PaletteFontWhite); }
-            if (Font10 != null && PaletteFontWhite != null) { Font10.SetPalettePtr(PaletteFontWhite); }
-            if (Font12 != null && PaletteFontWhite != null) { Font12.SetPalettePtr(PaletteFontWhite); }
-            if (FontDebug != null && PaletteFontWhite != null) { FontDebug.SetPalettePtr(PaletteFontWhite); }
+            // SetPalettePtr(font, white)
+            CFont.SetPalettePtr(sFont08, sPalFontWhite);
+            CFont.SetPalettePtr(sFont10, sPalFontWhite);
+            CFont.SetPalettePtr(sFont12, sPalFontWhite);
+            CFont.SetPalettePtr(sFontDebug, sPalFontWhite);
 
-            string windowBobPath = NC2Logic.LanguageTool_GetFilename("data\\gui\\lang\\%s\\bobs\\ls_gui_window.bmd", false);
+            // LanguageTool_GetFilename(..., local_128, false); DAT_1003a4478 = XB_Storable_LoadObject(local_128)
+            string bobsPath;
+            OpenVikings.NC2Logic.LanguageTool.GetFilename("data\\gui\\lang\\%s\\bobs\\ls_gui_window.bmd", out bobsPath, false);
+            sGuiWindowBobs = XB_Storable_LoadObject(bobsPath);
 
-            GuiWindowBobBmd = NXBasicsApi.XB_Storable_LoadObject<object>(windowBobPath);
-
-            PaletteFrame = NXBasicsApi.XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\frame.pcx");
-            PaletteBgNormal = NXBasicsApi.XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\bg_normal.pcx");
-            PalettePapyrus = NXBasicsApi.XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\papyrus.pcx");
-            PaletteBarHitpoints = NXBasicsApi.XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\bar_hitpoints.pcx");
-            PaletteBarStandart = NXBasicsApi.XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\bar_standart.pcx");
-            PaletteBarDisabled = NXBasicsApi.XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\bar_disabled.pcx");
-            PaletteIconsLeft = NXBasicsApi.XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\IconsLeft.pcx");
-            PaletteContext = NXBasicsApi.XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\Context.pcx");
+            // Load GUI palettes
+            sPalFrame = (CPalette)XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\frame.pcx");
+            sPalBgNormal = (CPalette)XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\bg_normal.pcx");
+            sPalPapyrus = (CPalette)XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\papyrus.pcx");
+            sPalBarHitpoints = (CPalette)XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\bar_hitpoints.pcx");
+            sPalBarStandard = (CPalette)XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\bar_standart.pcx");
+            sPalBarDisabled = (CPalette)XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\bar_disabled.pcx");
+            sPalIconsLeft = (CPalette)XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\IconsLeft.pcx");
+            sPalContext = (CPalette)XB_PictureTool_LoadPaletteOutOfPicture("data\\gui\\palettes\\Context.pcx");
         }
 
+        // NC2GuiToolsBase::CGuiBaseDataManager::~CGuiBaseDataManager()
         public void Dispose()
         {
             if (_disposed)
@@ -96,137 +110,165 @@ namespace OpenVikings.NC2GuiToolsBase
                 return;
             }
 
-            _disposed = true;
-
             DynamicData_Free();
 
-            // Release all statics (RE calls vtable+0x20). In managed code, Dispose is the equivalent.
-            SafeDispose(PaletteContext);
-            PaletteContext = null;
+            ReleaseObject(sPalContext);
+            ReleaseObject(sPalIconsLeft);
+            ReleaseObject(sPalBarDisabled);
+            ReleaseObject(sPalBarStandard);
+            ReleaseObject(sPalBarHitpoints);
+            ReleaseObject(sPalPapyrus);
+            ReleaseObject(sPalBgNormal);
+            ReleaseObject(sPalFrame);
+            ReleaseObject(sGuiWindowBobs);
+            ReleaseObject(sPalFontDark);
+            ReleaseObject(sPalFontRed);
+            ReleaseObject(sPalFontDimmed);
+            ReleaseObject(sPalFontWhite);
+            ReleaseObject(sFontDebug);
+            ReleaseObject(sFont12);
+            ReleaseObject(sFont10);
+            ReleaseObject(sFont08);
 
-            SafeDispose(PaletteIconsLeft);
-            PaletteIconsLeft = null;
-
-            SafeDispose(PaletteBarDisabled);
-            PaletteBarDisabled = null;
-
-            SafeDispose(PaletteBarStandart);
-            PaletteBarStandart = null;
-
-            SafeDispose(PaletteBarHitpoints);
-            PaletteBarHitpoints = null;
-
-            SafeDispose(PalettePapyrus);
-            PalettePapyrus = null;
-
-            SafeDispose(PaletteBgNormal);
-            PaletteBgNormal = null;
-
-            SafeDispose(PaletteFrame);
-            PaletteFrame = null;
-
-            SafeDispose(GuiWindowBobBmd);
-            GuiWindowBobBmd = null;
-
-            SafeDispose(PaletteFontDark);
-            PaletteFontDark = null;
-
-            SafeDispose(PaletteFontRed);
-            PaletteFontRed = null;
-
-            SafeDispose(PaletteFontDimmed);
-            PaletteFontDimmed = null;
-
-            SafeDispose(PaletteFontWhite);
-            PaletteFontWhite = null;
-
-            SafeDispose(FontDebug);
-            FontDebug = null;
-
-            SafeDispose(Font12);
-            Font12 = null;
-
-            SafeDispose(Font10);
-            Font10 = null;
-
-            SafeDispose(Font08);
-            Font08 = null;
-
+            ResetStaticState();
             sTheObjectPtr = null;
+
+            _disposed = true;
         }
 
+        // NC2GuiToolsBase::CGuiBaseDataManager::DynamicData_Free()
         internal static void DynamicData_Free()
         {
-            // PaletteChanged calls exist to notify dependents; keep order as in RE.
-            if (PaletteFontWhite != null) { CPalette.PaletteChanged(PaletteFontWhite); }
-            if (PaletteFontDimmed != null) { CPalette.PaletteChanged(PaletteFontDimmed); }
-            if (PaletteFontRed != null) { CPalette.PaletteChanged(PaletteFontRed); }
-            if (PaletteFontDark != null) { CPalette.PaletteChanged(PaletteFontDark); }
-            if (PaletteFrame != null) { CPalette.PaletteChanged(PaletteFrame); }
-            if (PaletteBgNormal != null) { CPalette.PaletteChanged(PaletteBgNormal); }
-            if (PalettePapyrus != null) { CPalette.PaletteChanged(PalettePapyrus); }
+            // PaletteChanged calls
+            CPalette.PaletteChanged(sPalFontWhite);
+            CPalette.PaletteChanged(sPalFontDimmed);
+            CPalette.PaletteChanged(sPalFontRed);
+            CPalette.PaletteChanged(sPalFontDark);
+            CPalette.PaletteChanged(sPalFrame);
+            CPalette.PaletteChanged(sPalBgNormal);
+            CPalette.PaletteChanged(sPalPapyrus);
 
-            if (!_dynamicLoaded)
+            if (sDynamicDataLoaded != 0)
             {
-                return;
+                ReleaseObject(sBmpBgHeadline);
+                ReleaseObject(sBmpBgButtonHilite);
+                ReleaseObject(sBmpBgSelected);
+                ReleaseObject(sBmpBgButton);
+                ReleaseObject(sBmpBg);
+
+                sBmpBg = null;
+                sBmpBgButton = null;
+                sBmpBgSelected = null;
+                sBmpBgButtonHilite = null;
+                sBmpBgHeadline = null;
+
+                sDynamicDataLoaded = 0;
             }
-
-            SafeDispose(BgHeadline);
-            BgHeadline = null;
-
-            SafeDispose(BgButtonHilite);
-            BgButtonHilite = null;
-
-            SafeDispose(BgSelected);
-            BgSelected = null;
-
-            SafeDispose(BgButton);
-            BgButton = null;
-
-            SafeDispose(Bg);
-            Bg = null;
-
-            _dynamicLoaded = false;
         }
 
-        internal static void DynamicData_Load()
+        // NC2GuiToolsBase::CGuiBaseDataManager::DynamicData_Load()
+        internal static void DynamicData_Load(byte bpp)
         {
             DynamicData_Free();
 
-            // RE reads desktop->backbuffer->colorDepthByte
-            CDesktop? desktop = CDesktop.Current;
-            if (desktop == null || desktop.BackBuffer == null)
-            {
-                // In RE this would likely crash; in C# we fail fast with a clear error.
-                throw new InvalidOperationException("CDesktop.Current.BackBuffer must be initialized before DynamicData_Load().");
-            }
+            // uVar1 = *(uchar *)(*(long *)(NXBaseGui::CDesktop::sTheObjectPtr + 0x10) + 8);
+            // The exact field chain needs the real Desktop/Bitmap API. This is kept as a single call-site hook.
 
-            byte colorDepthBits = desktop.BackBuffer.ColorDepthBits;
+            LoadPictureIntoBitmap("data\\gui\\bitmaps\\bg.pcx", bpp, out sBmpBg);
+            LoadPictureIntoBitmap("data\\gui\\bitmaps\\bg_button.pcx", bpp, out sBmpBgButton);
+            LoadPictureIntoBitmap("data\\gui\\bitmaps\\bg_selected.pcx", bpp, out sBmpBgSelected);
+            LoadPictureIntoBitmap("data\\gui\\bitmaps\\bg_button_hilite.pcx", bpp, out sBmpBgButtonHilite);
+            LoadPictureIntoBitmap("data\\gui\\bitmaps\\bg_headline.pcx", bpp, out sBmpBgHeadline);
 
-            Bg = LoadBitmapFromPcx("data\\gui\\bitmaps\\bg.pcx", colorDepthBits);
-            BgButton = LoadBitmapFromPcx("data\\gui\\bitmaps\\bg_button.pcx", colorDepthBits);
-            BgSelected = LoadBitmapFromPcx("data\\gui\\bitmaps\\bg_selected.pcx", colorDepthBits);
-            BgButtonHilite = LoadBitmapFromPcx("data\\gui\\bitmaps\\bg_button_hilite.pcx", colorDepthBits);
-            BgHeadline = LoadBitmapFromPcx("data\\gui\\bitmaps\\bg_headline.pcx", colorDepthBits);
-
-            _dynamicLoaded = true;
+            sDynamicDataLoaded = 1;
         }
 
-        private static CBitmap LoadBitmapFromPcx(string pcxPath, byte colorDepthBits)
+        private static void LoadPictureIntoBitmap(string picturePath, byte bpp, out CBitmap bitmap)
         {
-            // Mirrors: CPicture(pcx), new CBitmap(width,height,depth), CopyIntoBitmap, ~CPicture
-            using CPicture picture = new(pcxPath);
-            CBitmap bitmap = new(picture.Width, picture.Height, colorDepthBits);
-            picture.CopyIntoBitmap(bitmap, 0, 0);
-            return bitmap;
+            // CPicture pic("..."); bitmap = new CBitmap(pic.Width, pic.Height, bpp); CopyIntoBitmap(pic, bitmap, 0, 0); ~CPicture
+            CPicture picture = new(picturePath);
+
+            try
+            {
+                uint width = picture.Width;
+                uint height = picture.Height;
+
+                bitmap = new CBitmap(width, height, bpp);
+                CBitmap.CopyIntoBitmap(picture, bitmap, 0, 0);
+            }
+            finally
+            {
+                picture.Dispose();
+            }
         }
 
-        private static void SafeDispose(object? obj)
+        private static void ResetStaticState()
+        {
+            sFont08 = null;
+            sFont10 = null;
+            sFont12 = null;
+            sFontDebug = null;
+
+            sPalFontWhite = null;
+            sPalFontDimmed = null;
+            sPalFontRed = null;
+            sPalFontDark = null;
+
+            sGuiWindowBobs = null;
+
+            sPalFrame = null;
+            sPalBgNormal = null;
+            sPalPapyrus = null;
+            sPalBarHitpoints = null;
+            sPalBarStandard = null;
+            sPalBarDisabled = null;
+            sPalIconsLeft = null;
+            sPalContext = null;
+
+            sDynamicDataLoaded = 0;
+            sBmpBg = null;
+            sBmpBgButton = null;
+            sBmpBgSelected = null;
+            sBmpBgButtonHilite = null;
+            sBmpBgHeadline = null;
+        }
+
+        private static void ReleaseObject(object obj)
         {
             if (obj is IDisposable disposable)
             {
                 disposable.Dispose();
             }
         }
+
+        private static void TrySetFontSpaceValue(CFont font, int value)
+        {
+            if (font == null)
+            {
+                return;
+            }
+
+            // The dump writes to font + 0x10. If CFont exposes that as a property/field, wire it here.
+            // Example (placeholder):
+            // font.SpaceValue = value;
+        }
+
+        private static byte GetDesktopBpp()
+        {
+            CDesktop desktop = CDesktop.sTheObjectPtr;
+            if (desktop == null)
+            {
+                return 0;
+            }
+
+            CBitmap screen = desktop.ScreenBitmap;
+            if (screen == null)
+            {
+                return 0;
+            }
+
+            return screen.Bpp;
+        }
+
     }
 }

@@ -1,6 +1,4 @@
-﻿using OpenVikings.NXBasics.Structs;
-
-namespace OpenVikings.NXBasics
+﻿namespace OpenVikings.NXBasics
 {
     // RE facts:
     // - Palette stores 256 entries
@@ -127,10 +125,7 @@ namespace OpenVikings.NXBasics
 
         internal void CopyIntoPalette(CPalette target)
         {
-            if (target == null)
-            {
-                throw new ArgumentNullException(nameof(target));
-            }
+            ArgumentNullException.ThrowIfNull(target);
 
             Array.Copy(_r, target._r, EntryCount);
             Array.Copy(_g, target._g, EntryCount);
@@ -142,10 +137,7 @@ namespace OpenVikings.NXBasics
 
         internal void AssignFrom(CPalette source)
         {
-            if (source == null)
-            {
-                throw new ArgumentNullException(nameof(source));
-            }
+            ArgumentNullException.ThrowIfNull(source);
 
             Array.Copy(source._r, _r, EntryCount);
             Array.Copy(source._g, _g, EntryCount);
@@ -450,20 +442,59 @@ namespace OpenVikings.NXBasics
 
     internal readonly struct SColorModifier
     {
-        // Placeholder: implement your real modifier logic (brightness, gamma, etc.)
-        private readonly int _delta;
+        private readonly bool _enabled;
+        private readonly float _p1;
+        private readonly float _p2;
+        private readonly float _p3;
 
-        internal SColorModifier(int delta)
+        internal SColorModifier(bool enabled, float p1, float p2, float p3)
         {
-            _delta = delta;
+            _enabled = enabled;
+            _p1 = p1;
+            _p2 = p2;
+            _p3 = p3;
         }
 
-        internal byte Apply(byte channel)
+        internal void Apply(ref byte r, ref byte g, ref byte b)
         {
-            int v = channel + _delta;
-            if (v < 0) { v = 0; }
-            if (v > 255) { v = 255; }
-            return (byte)v;
+            if (!_enabled)
+            {
+                return;
+            }
+
+            // Placeholder math – replace with exact RE once recovered.
+            // IMPORTANT: shape is correct, not the formula yet.
+
+            r = ClampToByte(r + (int)_p1);
+            g = ClampToByte(g + (int)_p2);
+            b = ClampToByte(b + (int)_p3);
+        }
+
+        private static byte ClampToByte(int value)
+        {
+            if (value < 0) { return 0; }
+            if (value > 255) { return 255; }
+            return (byte)value;
+        }
+    }
+
+
+    internal struct SColorRGB
+    {
+        internal byte R;
+        internal byte G;
+        internal byte B;
+
+        internal SColorRGB(byte r, byte g, byte b)
+        {
+            R = r;
+            G = g;
+            B = b;
+        }
+
+        internal void Modify(SColorModifier modifier)
+        {
+            modifier.Apply(ref R, ref G, ref B);
         }
     }
 }

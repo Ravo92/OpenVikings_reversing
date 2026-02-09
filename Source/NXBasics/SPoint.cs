@@ -1,31 +1,28 @@
 ﻿namespace OpenVikings.NXBasics
 {
-    internal struct SPoint : IEquatable<SPoint>
+    internal struct SPoint
     {
         internal int X;
         internal int Y;
 
-        internal SPoint(int x, int y)
-        {
-            X = x;
-            Y = y;
-        }
-
+        // NXBasics::SPoint::SPoint(NXBasics::SPoint const&)
         internal SPoint(in SPoint other)
         {
             X = other.X;
             Y = other.Y;
         }
 
+        // NXBasics::SPoint::SPoint(NXBasics::SRectangle const&)
         internal SPoint(in SRectangle rect)
         {
-            X = rect.X;
-            Y = rect.Y;
+            X = rect.Left;
+            Y = rect.Top;
         }
 
+        // NXBasics::TEMPNAMEPLACEHOLDERVALUE(NXBasics::SPoint const&, NXBasics::SPoint const&)
         public static bool operator ==(SPoint left, SPoint right)
         {
-            return left.X == right.X && left.Y == right.Y;
+            return left.Y == right.Y && left.X == right.X;
         }
 
         public static bool operator !=(SPoint left, SPoint right)
@@ -33,74 +30,75 @@
             return !(left == right);
         }
 
-        public bool Equals(SPoint other)
-        {
-            return this == other;
-        }
-
         public override bool Equals(object? obj)
         {
-            if (obj is SPoint point)
+            if (obj is SPoint other)
             {
-                return this == point;
+                return this == other;
             }
 
             return false;
         }
 
-        public override int GetHashCode()
+        public override readonly int GetHashCode()
         {
             return HashCode.Combine(X, Y);
         }
 
+        // NXBasics::SPoint::PlaceInside(NXBasics::SRectangle const&)
         internal void PlaceInside(in SRectangle rect)
         {
-            int rectX = rect.X;
-            int rectY = rect.Y;
+            int left = rect.Left;
+            int x = X;
 
-            int thisX = X;
-            if (thisX < rectX)
+            if (x < left)
             {
-                X = rectX;
-                thisX = rectX;
+                X = left;
+                x = left;
             }
 
-            int thisY = Y;
-            if (thisY < rectY)
+            int top = rect.Top;
+            int y = Y;
+
+            if (y < top)
             {
-                Y = rectY;
-                thisY = rectY;
+                Y = top;
+                y = top;
             }
 
-            int maxX = rectX + rect.Width - 1;
-            if (maxX < thisX)
+            int right = left + rect.Width - 1;
+            if (right < x)
             {
-                X = maxX;
+                X = right;
             }
 
-            int maxY = rectY + rect.Height - 1;
-            if (maxY < thisY)
+            int bottom = top + rect.Height - 1;
+            if (bottom < y)
             {
-                Y = maxY;
+                Y = bottom;
             }
         }
 
-        internal bool IsInside(in SRectangle rect)
+        // NXBasics::SPoint::IsInside(NXBasics::SRectangle const&) const
+        internal readonly int IsInside(in SRectangle rect)
         {
-            int rectX = rect.X;
-
-            if (rectX <= X && X <= rectX + rect.Width - 1)
+            int x = X;
+            if (rect.Left <= x && x <= rect.Left + rect.Width - 1)
             {
-                int rectY = rect.Y;
-                int thisY = Y;
-
-                if (rectY <= thisY)
+                int y = Y;
+                if (rect.Top <= y && y <= rect.Top + rect.Height - 1)
                 {
-                    return thisY <= rectY + rect.Height - 1;
+                    return 1;
                 }
             }
 
-            return false;
+            return 0;
+        }
+
+        // Convenience wrapper for call-sites that prefer bool (keeps the 1:1 int method intact).
+        internal readonly bool IsInsideBool(in SRectangle rect)
+        {
+            return IsInside(in rect) != 0;
         }
     }
 }

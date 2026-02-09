@@ -11,10 +11,6 @@
   <ItemGroup>
     <Folder Include="NC2InGameGuiInputManager\" />
     <Folder Include="NC2MainMenuGuiManager\" />
-    <Folder Include="NXSysTime\" />
-    <Folder Include="NXSysMouseManager\" />
-    <Folder Include="NXSysMisc\" />
-    <Folder Include="NXSysKeyManager\" />
     <Folder Include="NXSys2DApp\" />
   </ItemGroup>
 
