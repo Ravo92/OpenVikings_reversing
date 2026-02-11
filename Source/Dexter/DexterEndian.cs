@@ -1,6 +1,6 @@
 ﻿using System.Buffers.Binary;
 
-namespace OpenVikings
+namespace OpenVikings.Dexter
 {
     internal static class DexterEndian
     {

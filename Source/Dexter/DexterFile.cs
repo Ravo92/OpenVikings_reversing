@@ -1,6 +1,6 @@
 ﻿using System.Runtime.InteropServices;
 
-namespace OpenVikings
+namespace OpenVikings.Dexter
 {
     internal static class DexterFile
     {

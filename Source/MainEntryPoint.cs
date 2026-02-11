@@ -80,7 +80,7 @@ class Program
         // ------------------------------------------------------------
         // Application core
         // ------------------------------------------------------------
-        OpenVikingsGfxSettings gfx = new()
+        OpenVikingsGFXSettings gfx = new()
         {
             CallbackTimeMs = 16 // ~60 FPS
         };

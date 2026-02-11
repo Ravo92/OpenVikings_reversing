@@ -74,7 +74,6 @@ namespace OpenVikings.Engine
 
         public void DesktopOpen(int width, int height, uint depth)
         {
-            // Mirrors: if (mStaticVars == '\0')
             if (_desktopInitialized)
             {
                 return;
@@ -84,40 +83,36 @@ namespace OpenVikings.Engine
             _desktopHeight = height;
             _desktopDepth = depth;
 
-            // Mirrors: new CDesktop(width, height, (uchar)depth)
-            _ = new CDesktop(width, height, (byte)depth);
+            _ = new CDesktop(unchecked((uint)width), unchecked((uint)height), unchecked((byte)depth));
 
-            // Mirrors: CGuiBaseDataManager::DynamicData_Load()
-            CGuiBaseDataManager.DynamicData_Load();
+            CGuiBaseDataManager.DynamicData_Load(unchecked((byte)depth));
 
-            // Mirrors: PrimaryMessageHandler_Set(...)
-            // You can keep this as CBaseElement for now.
+            CDesktop? desktop = CDesktop.sTheObjectPtr;
+            if (desktop == null)
+            {
+                return;
+            }
+
             CBaseElement primaryHandler = new CGuiManagerPrimaryMessageHandlerElement();
-            CDesktop.Current.SetPrimaryMessageHandler(primaryHandler);
+            desktop.PrimaryMessageHandler_Set(primaryHandler);
 
-            // Mirrors: desktop + 0x250 = new MousePointer()
-            // Typisiert später, wenn du dein MousePointer-Interface hast.
-            object mousePointer = new CGuiManagerMousePointer();
-            CDesktop.Current.AttachMousePointer(mousePointer);
+            CGuiManagerMousePointer mousePointer = new();
+            mousePointer.Show();
+            desktop.SetPostDrawHook(new GuiManagerMousePointerPostDrawHook(mousePointer));
 
-            // Mirrors: RegisterCallback(...) list from RE
             RegisterInGameCallbacks();
 
-            // Mirrors: CE2Manager::Inform_DesktopXTructed(width,height,depth)
             EngineEventBridge.InformDesktopCreated(width, height, depth);
 
-            // Mirrors: new CWorldDisplayElement(rect, true, true)
             SRectangle fullScreenRect = new(0, 0, width, height);
             WorldDisplayElement worldDisplay = new(fullScreenRect, interactive: true, flag: true);
             _worldDisplayElement = worldDisplay;
 
-            // Mirrors: BaseToolDesktop_AddBackgroundElement(worldDisplay)
-            CDesktop.Current.ElementAddBackground(worldDisplay, insertAtEnd: true);
+            desktop.Element_AddBackground(worldDisplay, addToEnd: true);
 
             _desktopInitialized = true;
             _desktopActive = true;
 
-            // NOTE: MainMenu variant calls Screen_ChangeTo(this,1,0) at end.
             ChangeScreen(1, 0);
         }
 

@@ -1,4 +1,4 @@
-﻿using OpenVikings.Engine.NC2E2;
+﻿using OpenVikings.NC2E2;
 
 namespace OpenVikings.Engine
 {

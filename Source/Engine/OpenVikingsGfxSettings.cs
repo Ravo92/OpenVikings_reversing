@@ -1,6 +1,6 @@
 ﻿namespace OpenVikings.Engine
 {
-    public sealed class OpenVikingsGfxSettings
+    public sealed class OpenVikingsGFXSettings
     {
         /// <summary>
         /// Target callback time (ms). Special values:

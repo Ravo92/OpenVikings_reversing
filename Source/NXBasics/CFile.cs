@@ -1,4 +1,5 @@
-﻿using System;
+﻿using OpenVikings.Dexter;
+using System;
 using System.IO;
 
 namespace OpenVikings.NXBasics

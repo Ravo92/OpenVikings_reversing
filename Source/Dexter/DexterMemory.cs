@@ -1,4 +1,4 @@
-﻿namespace OpenVikings
+﻿namespace OpenVikings.Dexter
 {
     internal static class DexterMemory
     {

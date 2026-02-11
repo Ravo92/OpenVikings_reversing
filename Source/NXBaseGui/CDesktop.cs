@@ -1,5 +1,4 @@
-﻿using OpenVikings.Engine.NC2E2;
-using OpenVikings.Interfaces;
+﻿using OpenVikings.Interfaces;
 using OpenVikings.NXBasics;
 using OpenVikings.NXSysKeyManager;
 using OpenVikings.NXSysMouseManager;
@@ -51,6 +50,19 @@ internal sealed class CDesktop : IDisposable
     private static readonly SPoint _activateSentinelPoint = new(in _activateSentinelRect);
 
     private static readonly SRectangle _activateSentinelRect = new(-1, -1, 1, 1);
+
+    internal CBitmap BackBuffer
+    {
+        get
+        {
+            if (_desktopBitmap == null)
+            {
+                throw new InvalidOperationException("Desktop back buffer is not available.");
+            }
+
+            return _desktopBitmap;
+        }
+    }
 
     internal CDesktop(uint width, uint height, byte colorDepth)
     {

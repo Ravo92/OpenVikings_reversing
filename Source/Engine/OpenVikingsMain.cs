@@ -6,10 +6,10 @@ namespace OpenVikings.Engine
     {
         private readonly ApplicationMessageProcessor _messageProcessor;
         private readonly IMasterControlProgram _masterControlProgram;
-        private readonly OpenVikingsGfxSettings _gfx;
+        private readonly OpenVikingsGFXSettings _gfx;
         private readonly LogicTickDispatcher _logicTickDispatcher;
 
-        internal OpenVikingsMain(ApplicationMessageProcessor messageProcessor, IMasterControlProgram masterControlProgram, OpenVikingsGfxSettings gfx, LogicTickDispatcher logicTickDispatcher)
+        internal OpenVikingsMain(ApplicationMessageProcessor messageProcessor, IMasterControlProgram masterControlProgram, OpenVikingsGFXSettings gfx, LogicTickDispatcher logicTickDispatcher)
         {
             _messageProcessor = messageProcessor ?? throw new ArgumentNullException(nameof(messageProcessor));
             _masterControlProgram = masterControlProgram ?? throw new ArgumentNullException(nameof(masterControlProgram));

@@ -329,7 +329,7 @@ internal class CBaseWindow : CBaseElement
     {
         foreach (CBaseElement element in _vars.ElementsReversePickOrder)
         {
-            ulong handled = element.XGui_BE_Message_Handle(TXGuiMessageTypes.WindowCommand, a, b, c, d);
+            ulong handled = element.XGui_BE_Message_Handle(TXGuiMessageTypes.BroadcastToWindows, a, b, c, d);
             if (handled != 0)
             {
                 return element;
