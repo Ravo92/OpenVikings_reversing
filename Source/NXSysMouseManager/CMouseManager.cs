@@ -1,5 +1,4 @@
 ﻿using OpenVikings.Dexter;
-using OpenVikings.NXBaseGui;
 using OpenVikings.NXBasics;
 using OpenVikings.NXSys;
 using static OpenVikings.StructsCollection;
@@ -11,6 +10,7 @@ namespace OpenVikings.NXSysMouseManager
     {
         // "sTheObjectPtr"
         internal static CMouseManager? sTheObjectPtr;
+        private readonly DexterOS _dexterOs;
 
         // Offsets (based on decompile)
         // 0x00
@@ -62,7 +62,7 @@ namespace OpenVikings.NXSysMouseManager
 
         // 0x50 (function pointer / callback returning char/bool)
         // Used to decide whether absolute position updates should be applied.
-        private Func<bool>? _absolutePositionAllowedCallback;
+        private Func<bool>? _blockAbsolutePositionUpdateCallback;
 
         // 0x58
         private bool _hideSystemCursorWhenFullscreen; // this[0x58]
@@ -70,13 +70,16 @@ namespace OpenVikings.NXSysMouseManager
         private bool _disposed;
 
         // NXSysMouseManager::CMouseManager::CMouseManager()
-        internal CMouseManager()
+        internal CMouseManager(DexterOS dexterOs)
         {
+            _dexterOs = dexterOs;
             sTheObjectPtr = this;
+
             ResetInternalState();
-            _hideSystemCursorWhenFullscreen = false;
+
             NXSysMisc.XWS_SystemMouseCursor_Reset();
         }
+
         internal SPoint Position
         {
             get
@@ -89,18 +92,7 @@ namespace OpenVikings.NXSysMouseManager
         }
 
         // NXSysMouseManager::CMouseManager::~CMouseManager()
-        ~CMouseManager()
-        {
-            Dispose(false);
-        }
-
         public void Dispose()
-        {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
-
-        private void Dispose(bool disposing)
         {
             if (_disposed)
             {
@@ -147,7 +139,7 @@ namespace OpenVikings.NXSysMouseManager
             _lastLeftClickX = 0;
             _lastLeftClickY = 0;
 
-            _absolutePositionAllowedCallback = null;
+            _blockAbsolutePositionUpdateCallback = null;
 
             _hideSystemCursorWhenFullscreen = false;
         }
@@ -161,7 +153,13 @@ namespace OpenVikings.NXSysMouseManager
         // NXSysMouseManager::CMouseManager::UpdateMouseState()
         internal void UpdateMouseState()
         {
-            L_SetState_Total(_leftDown, _middleDown, _rightDown, (int)DexterOS.MouseX, (int)DexterOS.MouseY, (int)DexterOS.MouseX - _x, (int)DexterOS.MouseY - _y, 0);
+            int osX = _dexterOs.MouseX;
+            int osY = _dexterOs.MouseY;
+
+            int dx = osX - _x;
+            int dy = osY - _y;
+
+            L_SetState_Total(_leftDown, _middleDown, _rightDown, osX, osY, dx, dy, 0);
             L_SetState_Total(_cLeftButtonState, _cMiddleButtonState, _cRightButtonState, _x, _y, 0, 0, 0);
         }
 
@@ -301,14 +299,16 @@ namespace OpenVikings.NXSysMouseManager
 
             bool allowAbsolutePositionUpdate = true;
 
-            if (_absolutePositionAllowedCallback != null)
+            if (_blockAbsolutePositionUpdateCallback != null)
             {
-                bool callbackResult = _absolutePositionAllowedCallback();
-                if (callbackResult)
+                bool block = _blockAbsolutePositionUpdateCallback();
+                if (block)
                 {
                     allowAbsolutePositionUpdate = false;
                 }
             }
+
+            bool stateChangedByMoveOrDelta = false;
 
             if (allowAbsolutePositionUpdate)
             {
@@ -323,15 +323,12 @@ namespace OpenVikings.NXSysMouseManager
                         SPoint p = default;
                         p.X = _x;
                         p.Y = _y;
-
                         p.PlaceInside(in _mouseArea);
-
                         _x = p.X;
                         _y = p.Y;
                     }
 
-                    _hasNewState = true;
-                    _lastStateChangeMs = (int)NXSysTime.XWS_Time_GetMilliSeconds();
+                    stateChangedByMoveOrDelta = true;
                 }
             }
             else
@@ -339,10 +336,14 @@ namespace OpenVikings.NXSysMouseManager
                 if (!(deltaX == 0 && deltaY == 0))
                 {
                     _positionChanged = true;
-
-                    _hasNewState = true;
-                    _lastStateChangeMs = (int)NXSysTime.XWS_Time_GetMilliSeconds();
+                    stateChangedByMoveOrDelta = true;
                 }
+            }
+
+            if (stateChangedByMoveOrDelta)
+            {
+                _hasNewState = true;
+                _lastStateChangeMs = (int)NXSysTime.XWS_Time_GetMilliSeconds();
             }
 
             if (_positionChanged && _lastLeftClickMs != 0)
@@ -470,6 +471,7 @@ namespace OpenVikings.NXSysMouseManager
             if (message.WheelDelta != 0)
             {
                 flags |= 0x0002u;
+                _positionChanged = false; // dump sets this[0x34] = 0 here
             }
 
             message.Flags = flags;
@@ -487,10 +489,16 @@ namespace OpenVikings.NXSysMouseManager
         private static bool _cMiddleButtonState;
         private static bool _cRightButtonState;
 
-        // Optional: allow wiring the function pointer at +0x50 without unsafe code.
-        internal void SetAbsolutePositionAllowedCallback(Func<bool>? callback)
+        internal static void SetButtonStates(bool left, bool middle, bool right)
         {
-            _absolutePositionAllowedCallback = callback;
+            _cLeftButtonState = left;
+            _cMiddleButtonState = middle;
+            _cRightButtonState = right;
+        }
+
+        internal void SetBlockAbsolutePositionUpdateCallback(Func<bool>? callback)
+        {
+            _blockAbsolutePositionUpdateCallback = callback;
         }
     }
 
@@ -506,11 +514,11 @@ namespace OpenVikings.NXSysMouseManager
 
         internal MouseMessageFlags FlagsEnum
         {
-            get { return (MouseMessageFlags)Flags; }
+            readonly get { return (MouseMessageFlags)Flags; }
             set { Flags = (uint)value; }
         }
 
-        internal SPoint Position
+        internal readonly SPoint Position
         {
             get
             {

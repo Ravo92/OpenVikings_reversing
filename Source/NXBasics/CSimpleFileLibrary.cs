@@ -16,7 +16,7 @@
             internal uint Size;
         }
 
-        private CFile _file;
+        private readonly CFile _file;
         private uint _fileCount;
         private FileEntry[] _files;
 
@@ -27,14 +27,13 @@
 
         internal CSimpleFileLibrary(string path)
         {
-            _file = default!;
+            _file = new CFile(path, true);
+
             _fileCount = 0;
             _files = [];
             _groupCount = 0;
             _groups = [];
             _disposed = false;
-
-            _file = new CFile(path, true);
 
             ReadUInt32(_file);
 
@@ -99,13 +98,7 @@
             }
 
             _disposed = true;
-            _file?.Dispose();
-            _file = default!;
-
-            _fileCount = 0;
-            _files = [];
-            _groupCount = 0;
-            _groups = [];
+            _file.Dispose();
         }
 
         internal static byte CalculateFilenameChecksum(string fileName)
@@ -261,7 +254,7 @@
                 return 0;
             }
 
-            return library.GetFileInLibraryPosition(fileName);
+            return (int)library.GetFileInLibraryPosition(fileName);
         }
 
         internal bool LoadFileOutOfLibrary(string fileName, byte[] destination, uint destinationCapacity)
@@ -284,30 +277,21 @@
                 return false;
             }
 
-            if (destination.Length < (int)size)
+            if (size > int.MaxValue)
             {
                 return false;
             }
 
-            _file.SeekToPosition(_files[id].Position);
-
-            System.Runtime.InteropServices.GCHandle handle = default;
-            try
+            int sizeInt = (int)size;
+            if (destination.Length < sizeInt)
             {
-                handle = System.Runtime.InteropServices.GCHandle.Alloc(destination, System.Runtime.InteropServices.GCHandleType.Pinned);
-                nint ptr = handle.AddrOfPinnedObject();
-
-                _file.Read(ptr, size);
-            }
-            finally
-            {
-                if (handle.IsAllocated)
-                {
-                    handle.Free();
-                }
+                return false;
             }
 
-            return true;
+            _file.SeekToPosition(unchecked((int)_files[id].Position));
+
+            int read = _file.Read(destination, sizeInt);
+            return read == sizeInt;
         }
 
         internal bool LoadFileOutOfLibrary(byte[] fileName, byte[] destination, uint destinationCapacity)
@@ -330,30 +314,21 @@
                 return false;
             }
 
-            if (destination.Length < (int)size)
+            if (size > int.MaxValue)
             {
                 return false;
             }
 
-            _file.SeekToPosition(_files[id].Position);
-
-            System.Runtime.InteropServices.GCHandle handle = default;
-            try
+            int sizeInt = (int)size;
+            if (destination.Length < sizeInt)
             {
-                handle = System.Runtime.InteropServices.GCHandle.Alloc(destination, System.Runtime.InteropServices.GCHandleType.Pinned);
-                nint ptr = handle.AddrOfPinnedObject();
-
-                _file.Read(ptr, size);
-            }
-            finally
-            {
-                if (handle.IsAllocated)
-                {
-                    handle.Free();
-                }
+                return false;
             }
 
-            return true;
+            _file.SeekToPosition(unchecked((int)_files[id].Position));
+
+            int read = _file.Read(destination, sizeInt);
+            return read == sizeInt;
         }
 
         internal bool SeekToFileInLibrary(string fileName)
@@ -364,7 +339,7 @@
                 return false;
             }
 
-            _file.SeekToPosition(_files[id].Position);
+            _file.SeekToPosition(unchecked((int)_files[id].Position));
             return true;
         }
 
@@ -376,20 +351,13 @@
                 return false;
             }
 
-            _file.SeekToPosition(_files[id].Position);
+            _file.SeekToPosition(unchecked((int)_files[id].Position));
             return true;
         }
 
         private static uint ReadUInt32(CFile file)
         {
-            ulong value = file.ReadLong();
-
-            if (value > uint.MaxValue)
-            {
-                throw new InvalidOperationException("ReadLong returned a value larger than 32-bit, but the file format expects 32-bit.");
-            }
-
-            return (uint)value;
+            return file.ReadLong();
         }
 
         private static string ReadAsciiStringExact(CFile file, uint length)
@@ -399,22 +367,16 @@
                 return string.Empty;
             }
 
-            byte[] buffer = new byte[length];
-
-            System.Runtime.InteropServices.GCHandle handle = default;
-            try
+            if (length > int.MaxValue)
             {
-                handle = System.Runtime.InteropServices.GCHandle.Alloc(buffer, System.Runtime.InteropServices.GCHandleType.Pinned);
-                nint ptr = handle.AddrOfPinnedObject();
-
-                file.Read(ptr, length);
+                throw new InvalidOperationException("String length exceeds supported managed size.");
             }
-            finally
+
+            byte[] buffer = new byte[(int)length];
+            int read = file.Read(buffer, (int)length);
+            if (read != (int)length)
             {
-                if (handle.IsAllocated)
-                {
-                    handle.Free();
-                }
+                throw new InvalidOperationException("Unexpected end of file while reading ASCII string.");
             }
 
             return System.Text.Encoding.ASCII.GetString(buffer);

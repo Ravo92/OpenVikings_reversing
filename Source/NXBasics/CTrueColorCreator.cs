@@ -4,34 +4,72 @@ namespace OpenVikings.NXBasics
 {
     internal sealed class CTrueColorCreator
     {
-        // RE: *this == 0 means "disabled".
-        internal bool Enabled { get; private set; }
+        private bool _enabled;
 
-        // RE: stored masks
-        internal uint RMask { get; private set; }  // +0x04
-        internal uint GMask { get; private set; }  // +0x08
-        internal uint BMask { get; private set; }  // +0x0C
+        // this + 4 / +8 / +0xC (masks, stored but not used in GetTrueColorWord directly in the dump)
+        internal uint _maskR;
+        internal uint _maskG;
+        internal uint _maskB;
 
-        // RE: shifts used by GetTrueColorWord
-        internal int RSrcShift { get; private set; } // +0x10
-        internal int GSrcShift { get; private set; } // +0x14
-        internal int BSrcShift { get; private set; } // +0x18
+        // this + 0x10 / 0x14 / 0x18 : shiftDown for (B,G,R) in dump usage
+        internal int _blueShiftDown;
+        internal int _greenShiftDown;
+        internal int _redShiftDown;
 
-        internal int RDstShift { get; private set; } // +0x1C
-        internal int GDstShift { get; private set; } // +0x20
-        internal int BDstShift { get; private set; } // +0x24
+        // this + 0x1C / 0x20 / 0x24 : shiftUp for (B,G,R) in dump usage
+        internal int _blueShiftUp;
+        internal int _greenShiftUp;
+        internal int _redShiftUp;
 
         internal CTrueColorCreator()
         {
-            Enabled = false;
+            _enabled = false;
         }
 
-        internal bool IsEnabled
+        internal bool IsEnabled => _enabled;
+
+        internal void SetTrueColorMasks(uint maskR, uint maskG, uint maskB)
         {
-            get
+            _maskR = maskR;
+            _maskG = maskG;
+            _maskB = maskB;
+
+            uint rUp = l_GetNumberOfZeroBitsFromRight(maskR);
+            uint gUp = l_GetNumberOfZeroBitsFromRight(maskG);
+            uint bUp = l_GetNumberOfZeroBitsFromRight(maskB);
+
+            _blueShiftUp = (int)rUp;  // NOTE: dump stores rUp at +0x1C but uses it with param_1 in the "r" position
+            _greenShiftUp = (int)gUp;
+            _redShiftUp = (int)bUp;
+
+            int rSet = l_GetNumberOfSetBits(maskR, rUp);
+            int gSet = l_GetNumberOfSetBits(maskG, gUp);
+            int bSet = l_GetNumberOfSetBits(maskB, bUp);
+
+            _blueShiftDown = 8 - rSet;
+            _greenShiftDown = 8 - gSet;
+            _redShiftDown = 8 - bSet;
+
+            _enabled = true;
+        }
+
+        // C++: GetTrueColorWord(SColorRGB const&) and GetTrueColorWord(uint,uint,uint)
+        internal uint GetTrueColorWord(byte r, byte g, byte b)
+        {
+            if (!_enabled)
             {
-                return Enabled;
+                return 0;
             }
+
+            // dump order:
+            // (param_3 >> this[0x18]) << this[0x24]  |
+            // (param_2 >> this[0x14]) << this[0x20]  |
+            // (param_1 >> this[0x10]) << this[0x1C]
+            uint pr = ((uint)b >> (_redShiftDown & 0x1F)) << (_redShiftUp & 0x1F);
+            uint pg = ((uint)g >> (_greenShiftDown & 0x1F)) << (_greenShiftUp & 0x1F);
+            uint pb = ((uint)r >> (_blueShiftDown & 0x1F)) << (_blueShiftUp & 0x1F);
+
+            return pr | pg | pb;
         }
 
         internal uint GetTrueColorWord(in SColorRGB color)
@@ -39,119 +77,43 @@ namespace OpenVikings.NXBasics
             return GetTrueColorWord(color.R, color.G, color.B);
         }
 
-        internal uint GetTrueColorWord(byte r, byte g, byte b)
+        private static uint l_GetNumberOfZeroBitsFromRight(uint value)
         {
-            if (!Enabled)
+            for (uint i = 0; i < 32; i += 4)
+            {
+                if (((value >> (int)i) & 1) != 0) return i;
+                if (((value >> (int)(i + 1)) & 1) != 0) return i + 1;
+                if (((value >> (int)(i + 2)) & 1) != 0) return i + 2;
+                if (((value >> (int)(i + 3)) & 1) != 0) return i + 3;
+            }
+            return 0;
+        }
+
+        private static int l_GetNumberOfSetBits(uint value, uint startBit)
+        {
+            if (startBit >= 32)
             {
                 return 0;
             }
 
-            uint ru = r;
-            uint gu = g;
-            uint bu = b;
+            int limit = 32 - (int)startBit;
+            int count = 0;
 
-            int bSrcShift = BSrcShift & 0x1F;
-            int bDstShift = BDstShift & 0x1F;
-
-            int gSrcShift = GSrcShift & 0x1F;
-            int gDstShift = GDstShift & 0x1F;
-
-            int rSrcShift = RSrcShift & 0x1F;
-            int rDstShift = RDstShift & 0x1F;
-
-            uint packed =
-                (((bu >> bSrcShift) << bDstShift) & BMask) |
-                (((gu >> gSrcShift) << gDstShift) & GMask) |
-                (((ru >> rSrcShift) << rDstShift) & RMask);
-
-            return packed;
-        }
-
-        internal void SetTrueColorMasks(uint rMask, uint gMask, uint bMask)
-        {
-            RMask = rMask;
-            GMask = gMask;
-            BMask = bMask;
-
-            RDstShift = (int)L_GetNumberOfZeroBitsFromRight(rMask);
-            int rWidth = L_GetNumberOfSetBits(rMask, (uint)RDstShift);
-            RSrcShift = (rWidth >= 8) ? 0 : (8 - rWidth);
-
-            GDstShift = (int)L_GetNumberOfZeroBitsFromRight(gMask);
-            int gWidth = L_GetNumberOfSetBits(gMask, (uint)GDstShift);
-            GSrcShift = (gWidth >= 8) ? 0 : (8 - gWidth);
-
-            BDstShift = (int)L_GetNumberOfZeroBitsFromRight(bMask);
-            int bWidth = L_GetNumberOfSetBits(bMask, (uint)BDstShift);
-            BSrcShift = (bWidth >= 8) ? 0 : (8 - bWidth);
-
-            Enabled = true;
-        }
-
-        // RE: l_GetNumberOfZeroBitsFromRight(unsigned int)
-        private static uint L_GetNumberOfZeroBitsFromRight(uint mask)
-        {
-            uint bit = 0;
-
-            while (true)
+            for (uint i = startBit; i < 32; i++)
             {
-                if (((mask >> (int)(bit & 0x1F)) & 1U) != 0U)
+                if (((value >> (int)i) & 1) == 0)
                 {
-                    return bit;
-                }
-                if (((mask >> (int)((bit + 1U) & 0x1F)) & 1U) != 0U)
-                {
-                    return bit + 1U;
-                }
-                if (((mask >> (int)((bit + 2U) & 0x1F)) & 1U) != 0U)
-                {
-                    return bit + 2U;
-                }
-                if (((mask >> (int)((bit + 3U) & 0x1F)) & 1U) != 0U)
-                {
-                    return bit + 3U;
+                    return count;
                 }
 
-                bit += 4U;
-
-                if (bit == 0x20U)
+                count++;
+                if (count == limit)
                 {
-                    // RE returns 0 if no bit is set at all
-                    return 0;
-                }
-            }
-        }
-
-        // RE: l_GetNumberOfSetBits(unsigned int mask, unsigned int startBit)
-        private static int L_GetNumberOfSetBits(uint mask, uint startBit)
-        {
-            int fallback = 0;
-
-            if (startBit < 0x20U)
-            {
-                fallback = (int)(0x20U - startBit);
-
-                int i = 0;
-                while (true)
-                {
-                    uint bitIndex = (startBit + (uint)i) & 0x1FU;
-
-                    if (((mask >> (int)bitIndex) & 1U) == 0U)
-                    {
-                        return i;
-                    }
-
-                    uint absoluteIndex = startBit + (uint)i;
-                    i++;
-
-                    if (absoluteIndex == 0x1FU)
-                    {
-                        break;
-                    }
+                    return limit;
                 }
             }
 
-            return fallback;
+            return limit;
         }
     }
 }

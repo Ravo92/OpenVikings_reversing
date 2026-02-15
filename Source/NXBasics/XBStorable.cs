@@ -2,45 +2,43 @@
 {
     internal static class XBStorable
     {
-        // RE type ids (Storable_GetId)
-        internal const uint IdMemory = 0x3E9;
-        internal const uint IdBitmap = 0x3F3;
-        internal const uint IdBobManager = 0x3F4;
-        internal const uint IdFont = 0x3F5;
-        internal const uint IdPalette = 0x3F6;
-        internal const uint IdRemapTable = 0x3F7;
-        internal const uint IdStringArray = 0x3FD;
-
-        internal static object? LoadObject(CFile file)
+        // Mirrors: NXBasics::XB_Storable_LoadObject(char const*)
+        internal static CStorable LoadObject(string path)
         {
-            ArgumentNullException.ThrowIfNull(file);
+            using CFile file = new(path, true);
 
-            uint typeId = file.ReadLong();
-            uint dataSize = file.ReadLong();
-
-            return typeId switch
-            {
-                IdMemory => new CMemory(file, dataSize),
-                IdBitmap => new CBitmap(file, dataSize),
-                IdBobManager => new CBobManager(file, dataSize),
-                IdFont => new CFont(file, dataSize),
-                IdPalette => new CPalette(file, dataSize),
-                IdRemapTable => (object)new CRemapTable(file, dataSize),
-                IdStringArray => (object)new CStringArray(file, dataSize),
-                _ => null,// RE: returns 0x0 if unknown
-            };
+            CStorable? obj = LoadObjectOrNull(file);
+            return obj ?? throw new InvalidOperationException($"Null storable header in '{path}'.");
         }
 
-        internal static object? LoadObject(string filename)
+        // Mirrors: NXBasics::XB_Storable_LoadObject(NXBasics::CFile&)
+        internal static CStorable LoadObject(CFile file)
         {
-            if (string.IsNullOrWhiteSpace(filename))
+            CStorable? obj = LoadObjectOrNull(file);
+            return obj ?? throw new InvalidOperationException("Null storable header in stream.");
+        }
+
+        internal static CStorable? LoadObjectOrNull(CFile file)
+        {
+            uint id = file.ReadLong();
+            uint version = file.ReadLong();
+
+            if (id == 0 && version == 0)
             {
-                throw new ArgumentException("Filename must not be null/empty.", nameof(filename));
+                return null;
             }
 
-            // RE: CFile::CFile(path, true) then LoadObject(file) then destructor
-            using CFile file = new(filename, true);
-            return LoadObject(file);
+            return id switch
+            {
+                0x3E9 => new CMemory(file, version),
+                0x3F3 => new CBitmap(file),
+                0x3F4 => new CBobManager(file),
+                0x3F5 => new CFont(file, version),
+                0x3F6 => new CPalette(file, version),
+                0x3F7 => new CRemapTable(file),
+                0x3FD => new CStringArray(file, version),
+                _ => throw new InvalidOperationException($"Unknown storable id 0x{id:X} (version {version})."),
+            };
         }
     }
 }

@@ -58,7 +58,7 @@ namespace OpenVikings.NC2Logic
                     return true;
                 }
 
-                index = index + 1u;
+                index++;
             }
 
             return false;
@@ -76,21 +76,20 @@ namespace OpenVikings.NC2Logic
 
         private int GetCommandAt(int index)
         {
-            switch (index)
+            return index switch
             {
-                case 0: return Command0;
-                case 1: return Command1;
-                case 2: return Command2;
-                case 3: return Command3;
-                case 4: return Command4;
-                case 5: return Command5;
-                case 6: return Command6;
-                case 7: return Command7;
-                case 8: return Command8;
-                case 9: return Command9;
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(index));
-            }
+                0 => Command0,
+                1 => Command1,
+                2 => Command2,
+                3 => Command3,
+                4 => Command4,
+                5 => Command5,
+                6 => Command6,
+                7 => Command7,
+                8 => Command8,
+                9 => Command9,
+                _ => throw new ArgumentOutOfRangeException(nameof(index)),
+            };
         }
 
         private void SetCommandAt(int index, int value)

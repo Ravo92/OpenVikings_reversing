@@ -1,26 +1,18 @@
-﻿namespace OpenVikings.NXBasics
+﻿using OpenVikings.NXBasics.Structs;
+
+namespace OpenVikings.NXBasics
 {
-    // RE facts:
-    // - Palette stores 256 entries
-    // - Each entry is effectively 4 bytes in memory (0x400 bytes total copied),
-    //   and FindMatchingColor reads channels at +8/+9/+10 relative to base.
-    // - Two lazy caches exist:
-    //   * HighColor table (256 * 2 bytes) at +0x408
-    //   * TrueColor table (256 * 4 bytes) at +0x410
-    internal sealed class CPalette : IDisposable
+    // NXBasics::CPalette
+    internal sealed class CPalette : CStorable, IDisposable
     {
         internal const int EntryCount = 256;
-        private const int BytesPerEntryOnDisk = 4;
-        private const int PaletteBytesOnDisk = EntryCount * BytesPerEntryOnDisk; // 0x400
 
-        // We keep the palette as RGB triplets.
-        // RE indexing suggests bytes exist at offsets "entry*4 + {8..10}" (B,G,R in original memory),
-        // but for our engine we store explicit R,G,B.
-        private readonly byte[] _r;
-        private readonly byte[] _g;
-        private readonly byte[] _b;
+        private const int BytesPerEntry = 4;
+        private const int PaletteBytes = EntryCount * BytesPerEntry; // 0x400
 
-        // Cached tables (RE: allocated with operator_new__ and freed on change)
+        // Original layout per entry: [B, G, R, ?]
+        private readonly byte[] _data;
+
         private ushort[]? _highColorTable; // 0x200 bytes
         private uint[]? _trueColorTable;   // 0x400 bytes
 
@@ -28,25 +20,17 @@
 
         internal CPalette()
         {
-            _r = new byte[EntryCount];
-            _g = new byte[EntryCount];
-            _b = new byte[EntryCount];
-
-            MakeAllColorsBlack();
+            _data = new byte[PaletteBytes];
+            L_InitObject();
+            L_MakeAllColorsBlack();
         }
 
         internal CPalette(CPalette other)
         {
-            _r = new byte[EntryCount];
-            _g = new byte[EntryCount];
-            _b = new byte[EntryCount];
+            ArgumentNullException.ThrowIfNull(other);
 
-            if (other != null)
-            {
-                Array.Copy(other._r, _r, EntryCount);
-                Array.Copy(other._g, _g, EntryCount);
-                Array.Copy(other._b, _b, EntryCount);
-            }
+            _data = new byte[PaletteBytes];
+            Buffer.BlockCopy(other._data, 0, _data, 0, PaletteBytes);
 
             PaletteChanged();
         }
@@ -55,56 +39,13 @@
         {
             ArgumentNullException.ThrowIfNull(file);
 
-            _r = new byte[EntryCount];
-            _g = new byte[EntryCount];
-            _b = new byte[EntryCount];
+            _data = new byte[PaletteBytes];
 
-            uint bytesToReadU = dataSize;
-            if (bytesToReadU > PaletteBytesOnDisk)
-            {
-                bytesToReadU = PaletteBytesOnDisk;
-            }
+            // Decompile does: memset(+8,0,0x410) then Read(...,0x400)
+            L_InitObject();
 
-            int bytesToRead = unchecked((int)bytesToReadU);
-            if (bytesToRead < 0)
-            {
-                bytesToRead = 0;
-            }
-
-            byte[] tmp = new byte[bytesToRead];
-
-            int bytesRead = 0;
-            if (bytesToRead > 0)
-            {
-                bytesRead = file.Read(tmp, bytesToRead);
-                if (bytesRead < 0)
-                {
-                    bytesRead = 0;
-                }
-                if (bytesRead > bytesToRead)
-                {
-                    bytesRead = bytesToRead;
-                }
-            }
-
-            int entryCountInFile = bytesRead / BytesPerEntryOnDisk;
-            if (entryCountInFile > EntryCount)
-            {
-                entryCountInFile = EntryCount;
-            }
-
-            for (int i = 0; i < entryCountInFile; i++)
-            {
-                int o = i * BytesPerEntryOnDisk;
-
-                byte b = tmp[o + 0];
-                byte g = tmp[o + 1];
-                byte r = tmp[o + 2];
-
-                _r[i] = r;
-                _g[i] = g;
-                _b[i] = b;
-            }
+            // Original ignores dataSize and always reads 0x400
+            file.Read(_data, PaletteBytes);
 
             PaletteChanged();
         }
@@ -116,54 +57,43 @@
                 return;
             }
 
-            _disposed = true;
-
-            // RE destructor frees both tables.
             _highColorTable = null;
             _trueColorTable = null;
+
+            _disposed = true;
         }
 
+        // NXBasics::CPalette::l_InitObject()
+        internal void L_InitObject()
+        {
+            Array.Clear(_data, 0, PaletteBytes);
+            PaletteChanged();
+        }
+
+        // NXBasics::CPalette::l_MakeAllColorsBlack()
+        internal void L_MakeAllColorsBlack()
+        {
+            Array.Clear(_data, 0, PaletteBytes);
+            PaletteChanged();
+        }
+
+        // NXBasics::CPalette::CopyIntoPalette(NXBasics::CPalette&) const
         internal void CopyIntoPalette(CPalette target)
         {
             ArgumentNullException.ThrowIfNull(target);
 
-            Array.Copy(_r, target._r, EntryCount);
-            Array.Copy(_g, target._g, EntryCount);
-            Array.Copy(_b, target._b, EntryCount);
-
-            // RE frees caches on target.
+            Buffer.BlockCopy(_data, 0, target._data, 0, PaletteBytes);
             target.PaletteChanged();
         }
 
+        // NXBasics::CPalette::operator=(CPalette const&)
         internal void AssignFrom(CPalette source)
         {
             ArgumentNullException.ThrowIfNull(source);
 
-            Array.Copy(source._r, _r, EntryCount);
-            Array.Copy(source._g, _g, EntryCount);
-            Array.Copy(source._b, _b, EntryCount);
-
-            // RE frees caches twice (defensive); net effect is "invalidate caches".
+            // Original frees caches before AND after copy; net effect: invalidate caches.
             PaletteChanged();
-        }
-
-        internal void InitObject()
-        {
-            // RE: memset(this+8, 0, 0x410) -> palette entries + extra fields cleared.
-            // In our representation: clear entries + invalidate caches.
-            Array.Clear(_r, 0, EntryCount);
-            Array.Clear(_g, 0, EntryCount);
-            Array.Clear(_b, 0, EntryCount);
-            PaletteChanged();
-        }
-
-        internal void MakeAllColorsBlack()
-        {
-            // RE loops writing zeros to every entry and frees both caches.
-            Array.Clear(_r, 0, EntryCount);
-            Array.Clear(_g, 0, EntryCount);
-            Array.Clear(_b, 0, EntryCount);
-
+            Buffer.BlockCopy(source._data, 0, _data, 0, PaletteBytes);
             PaletteChanged();
         }
 
@@ -179,7 +109,6 @@
 
         internal void PaletteChanged()
         {
-            // RE frees both cached tables.
             _highColorTable = null;
             _trueColorTable = null;
         }
@@ -191,9 +120,12 @@
                 throw new ArgumentOutOfRangeException(nameof(index));
             }
 
-            _r[index] = r;
-            _g[index] = g;
-            _b[index] = b;
+            int o = index * BytesPerEntry;
+
+            _data[o + 0] = b;
+            _data[o + 1] = g;
+            _data[o + 2] = r;
+            // _data[o + 3] unused in decompile
 
             PaletteChanged();
         }
@@ -205,18 +137,33 @@
                 throw new ArgumentOutOfRangeException(nameof(index));
             }
 
-            r = _r[index];
-            g = _g[index];
-            b = _b[index];
+            int o = index * BytesPerEntry;
+
+            b = _data[o + 0];
+            g = _data[o + 1];
+            r = _data[o + 2];
+        }
+
+        // NXBasics::CPalette::Storable_SaveData(NXBasics::CFile&)
+        internal override void Storable_SaveData(CFile file)
+        {
+            ArgumentNullException.ThrowIfNull(file);
+            file.Write(_data, PaletteBytes);
+        }
+
+        // NXBasics::CPalette::Storable_GetId() const
+        internal override uint Storable_GetId()
+        {
+            return 0x3F6u;
         }
 
         // ------------------------------------------------------------
         // FindMatchingColor (weighted squared distance)
-        // RE weights:
-        //   blue:  0x0F
-        //   green: 0x41
-        //   red:   0x1D
-        // distance = (db*0x0F)^2 + (dg*0x41)^2 + (dr*0x1D)^2
+        // Decompile reads:
+        //   R: entry*4 + 10
+        //   G: entry*4 + 9
+        //   B: entry*4 + 8
+        // In our data: [B,G,R,_] => offsets 0,1,2
         // ------------------------------------------------------------
         internal byte FindMatchingColor(byte r, byte g, byte b)
         {
@@ -225,9 +172,11 @@
 
             for (int i = 0; i < EntryCount; i++)
             {
-                int dr = AbsInt(r - _r[i]);
-                int dg = AbsInt(g - _g[i]);
-                int db = AbsInt(b - _b[i]);
+                int o = i * BytesPerEntry;
+
+                int dr = AbsInt(r - _data[o + 2]);
+                int dg = AbsInt(g - _data[o + 1]);
+                int db = AbsInt(b - _data[o + 0]);
 
                 uint score = (uint)(db * 0x0F * db * 0x0F
                                   + dg * 0x41 * dg * 0x41
@@ -253,13 +202,7 @@
             return FindMatchingColor(color.R, color.G, color.B);
         }
 
-        // ------------------------------------------------------------
-        // FindNearColor
-        // param_4 = threshold
-        // param_5 = if true -> Manhattan distance, else weighted squared distance (same weights as matching)
-        // If a color is found with distance <= threshold, return immediately.
-        // Otherwise return best found.
-        // ------------------------------------------------------------
+        // NXBasics::CPalette::FindNearColor(..., threshold, manhattan)
         internal byte FindNearColor(byte r, byte g, byte b, uint threshold, bool manhattan)
         {
             uint bestScore = 0x7fffffff;
@@ -267,22 +210,17 @@
 
             for (int i = 0; i < EntryCount; i++)
             {
-                int dr = AbsInt(r - _r[i]);
-                int dg = AbsInt(g - _g[i]);
-                int db = AbsInt(b - _b[i]);
+                int o = i * BytesPerEntry;
 
-                uint score;
+                int dr = AbsInt(r - _data[o + 2]);
+                int dg = AbsInt(g - _data[o + 1]);
+                int db = AbsInt(b - _data[o + 0]);
 
-                if (!manhattan)
-                {
-                    score = (uint)(db * 0x0F * db * 0x0F
-                                 + dg * 0x41 * dg * 0x41
-                                 + dr * 0x1D * dr * 0x1D);
-                }
-                else
-                {
-                    score = (uint)(dr + dg + db);
-                }
+                uint score = manhattan
+                    ? (uint)(dr + dg + db)
+                    : (uint)(db * 0x0F * db * 0x0F
+                           + dg * 0x41 * dg * 0x41
+                           + dr * 0x1D * dr * 0x1D);
 
                 if (score < bestScore)
                 {
@@ -299,31 +237,27 @@
             return (byte)bestIndex;
         }
 
-        // ------------------------------------------------------------
-        // Modify: applies a modifier to each color, then invalidates caches.
-        // RE calls SColorRGB::Modify for each entry.
-        // ------------------------------------------------------------
+        // NXBasics::CPalette::Modify(SColorModifier const&)
         internal void Modify(SColorModifier modifier)
         {
             for (int i = 0; i < EntryCount; i++)
             {
-                SColorRGB color = new(_r[i], _g[i], _b[i]);
-                color.Modify(modifier);
+                int o = i * 4;
 
-                _r[i] = color.R;
-                _g[i] = color.G;
-                _b[i] = color.B;
+                byte b = _data[o + 0];
+                byte g = _data[o + 1];
+                byte r = _data[o + 2];
+
+                modifier.Apply(ref r, ref g, ref b);
+
+                _data[o + 0] = b;
+                _data[o + 1] = g;
+                _data[o + 2] = r;
             }
 
             PaletteChanged();
         }
 
-        // ------------------------------------------------------------
-        // High/True color table handling
-        // RE uses CXBSystemManager::sHighColorCreatorPtr and ::sTrueColorCreatorPtr
-        // to create packed formats with source shifts + destination shifts.
-        // In C#, we represent these creators as structured config.
-        // ------------------------------------------------------------
         internal ushort[]? GetHighColorTablePtr()
         {
             EnsureHighColorTableBuilt();
@@ -334,12 +268,7 @@
         {
             EnsureHighColorTableBuilt();
 
-            if (_highColorTable == null)
-            {
-                return 0;
-            }
-
-            if (index >= EntryCount)
+            if (_highColorTable == null || index >= EntryCount)
             {
                 return 0;
             }
@@ -357,12 +286,7 @@
         {
             EnsureTrueColorTableBuilt();
 
-            if (_trueColorTable == null)
-            {
-                return 0;
-            }
-
-            if (index >= EntryCount)
+            if (_trueColorTable == null || index >= EntryCount)
             {
                 return 0;
             }
@@ -389,7 +313,7 @@
                 return;
             }
 
-            CHighColorCreator creator = CXBSystemManager.sHighColorCreatorPtr;
+            CHighColorCreator? creator = CXBSystemManager.sHighColorCreatorPtr;
             if (creator == null || !creator.IsEnabled)
             {
                 return;
@@ -399,7 +323,12 @@
 
             for (int i = 0; i < EntryCount; i++)
             {
-                table[i] = creator.GetHighColorWord(_r[i], _g[i], _b[i]);
+                int o = i * BytesPerEntry;
+                byte b = _data[o + 0];
+                byte g = _data[o + 1];
+                byte r = _data[o + 2];
+
+                table[i] = creator.GetHighColorWord(r, g, b);
             }
 
             _highColorTable = table;
@@ -412,7 +341,7 @@
                 return;
             }
 
-            CTrueColorCreator creator = CXBSystemManager.sTrueColorCreatorPtr;
+            CTrueColorCreator? creator = CXBSystemManager.sTrueColorCreatorPtr;
             if (creator == null || !creator.IsEnabled)
             {
                 return;
@@ -422,7 +351,12 @@
 
             for (int i = 0; i < EntryCount; i++)
             {
-                table[i] = creator.GetTrueColorWord(_r[i], _g[i], _b[i]);
+                int o = i * BytesPerEntry;
+                byte b = _data[o + 0];
+                byte g = _data[o + 1];
+                byte r = _data[o + 2];
+
+                table[i] = creator.GetTrueColorWord(r, g, b);
             }
 
             _trueColorTable = table;
@@ -431,70 +365,6 @@
         private static int AbsInt(int value)
         {
             return value < 0 ? -value : value;
-        }
-
-        internal static ulong Storable_GetId()
-        {
-            // RE: returns 0x3f6
-            return 0x3F6;
-        }
-    }
-
-    internal readonly struct SColorModifier
-    {
-        private readonly bool _enabled;
-        private readonly float _p1;
-        private readonly float _p2;
-        private readonly float _p3;
-
-        internal SColorModifier(bool enabled, float p1, float p2, float p3)
-        {
-            _enabled = enabled;
-            _p1 = p1;
-            _p2 = p2;
-            _p3 = p3;
-        }
-
-        internal void Apply(ref byte r, ref byte g, ref byte b)
-        {
-            if (!_enabled)
-            {
-                return;
-            }
-
-            // Placeholder math – replace with exact RE once recovered.
-            // IMPORTANT: shape is correct, not the formula yet.
-
-            r = ClampToByte(r + (int)_p1);
-            g = ClampToByte(g + (int)_p2);
-            b = ClampToByte(b + (int)_p3);
-        }
-
-        private static byte ClampToByte(int value)
-        {
-            if (value < 0) { return 0; }
-            if (value > 255) { return 255; }
-            return (byte)value;
-        }
-    }
-
-
-    internal struct SColorRGB
-    {
-        internal byte R;
-        internal byte G;
-        internal byte B;
-
-        internal SColorRGB(byte r, byte g, byte b)
-        {
-            R = r;
-            G = g;
-            B = b;
-        }
-
-        internal void Modify(SColorModifier modifier)
-        {
-            modifier.Apply(ref R, ref G, ref B);
         }
     }
 }

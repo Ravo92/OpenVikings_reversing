@@ -286,8 +286,8 @@ internal class CBaseElement
     // NXBaseGui::CBaseElement::XGui_BE_Element_ParentToLocalPosition(NXBasics::SPoint&) const
     internal void XGui_BE_Element_ParentToLocalPosition(ref SPoint point)
     {
-        point.X -= _rect.Left;
-        point.Y -= _rect.Top;
+        point.X -= _rect.X;
+        point.Y -= _rect.Y;
     }
 
     // NXBaseGui::CBaseElement::L_BE_GlobalToLocalCoordinates(NXBasics::SPoint&)
@@ -300,19 +300,19 @@ internal class CBaseElement
         if (parentElement != null)
         {
             SRectangle parentRect = parentElement._rect;
-            globalX -= parentRect.Left;
-            globalY -= parentRect.Top;
+            globalX -= parentRect.X;
+            globalY -= parentRect.Y;
         }
         else if (_parentWindow != null)
         {
             // Fallback: only if no parent element exists
             SRectangle parentRect = _parentWindow.Rect;
-            globalX -= parentRect.Left;
-            globalY -= parentRect.Top;
+            globalX -= parentRect.X;
+            globalY -= parentRect.Y;
         }
 
-        point.X = globalX - _rect.Left;
-        point.Y = globalY - _rect.Top;
+        point.X = globalX - _rect.X;
+        point.Y = globalY - _rect.Y;
     }
 
     // NXBaseGui::CBaseElement::BE_Internal_Element_Hide()
@@ -411,8 +411,8 @@ internal class CBaseElement
 
     protected virtual bool XGui_BE_Element_HitTest(in SPoint point)
     {
-        int left = _rect.Left;
-        int top = _rect.Top;
+        int left = _rect.X;
+        int top = _rect.Y;
 
         return point.X >= left &&
                point.X < left + _rect.Width &&

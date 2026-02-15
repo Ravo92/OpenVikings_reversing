@@ -36,7 +36,7 @@
             // English: If an entry with same callback + userData exists, remove it first.
             list.RemoveIfExists(callback, userData);
 
-            CallbackNode node = new CallbackNode(priority, callback, userData);
+            CallbackNode node = new(priority, callback, userData);
 
             // English: Insert descending by priority (higher priority first).
             list.InsertSorted(node);

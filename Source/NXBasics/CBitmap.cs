@@ -1,26 +1,28 @@
 ﻿using OpenVikings.NC2GuiToolsBase;
+using OpenVikings.NXBasics.Structs;
 
 namespace OpenVikings.NXBasics
 {
-    internal sealed class CBitmap : IDisposable
+    internal sealed class CBitmap : CStorable, IDisposable
     {
         #region Initialization and layout notes
 
         // --- Fields (layout-oriented, based on offsets in your dump) ---
 
-        // +0x08
-        private byte _bpp; // 0x08 / 0x10 / 0x20
+        // Byte at +0x08 in the original object (written as 1 byte).
+        private byte _bpp;
+
+        // Block at +0x0C (0x10 bytes) written verbatim by Storable_SaveData.
+        private readonly byte[] _storableBlock0C;
+
+        // Storable at +0x28 in the original (saved via CStorable::Storable_Save).
+        private readonly CStorable _pixelData;
 
         // +0x0C.. (SRectangle at +0x0C)
         private SRectangle _rect;
 
         // +0x28
-        private CMemory _memoryOwner; // owned memory (or null when view/external)
-
-        // +0x30 / +0x38 / +0x40
-        private nint _ptr8;   // raw pointer for 8bpp
-        private nint _ptr16;  // raw pointer for 16bpp
-        private nint _ptr32;  // raw pointer for 32bpp
+        private CMemory? _memoryOwner; // owned memory (or null when view/external)
 
         // +0x48 / +0x4C / +0x50
         private int _pitchPixels;   // "width" or inherited pitch for virtual
@@ -33,10 +35,10 @@ namespace OpenVikings.NXBasics
         // +0x58 / +0x5C / +0x60
         private int _virtualSrcX;
         private int _virtualSrcY;
-        private CBitmap _virtualParent;
+        private CBitmap? _virtualParent;
 
         // +0x68
-        private CPalette _palette;
+        private CPalette? _palette;
         private byte[]? _externalBuffer;
         private int _fixedXDistance;
 
@@ -59,16 +61,54 @@ namespace OpenVikings.NXBasics
         internal int Height { get { return _rect.Height; } }
         internal int StridePixels { get { return _pitchPixels; } }
 
-        private object _palettePtr;
+        private object? _palettePtr;
 
         // Managed backing buffers (you likely already have these in your reimplementation)
-        private byte[] _pixels8;
-        private ushort[] _pixels16;
-        private uint[] _pixels32;
+        private byte[]? _pixels8;
+        private ushort[]? _pixels16;
+        private uint[]? _pixels32;
 
         // --- Ctors / init ---
 
+        // Ensure _storableBlock0C is initialized in every ctor.
+        // Example:
+        // internal CBitmap(CFile file) { _storableBlock0C = new byte[0x10]; ...; _pixelData = ...; }
+
+        internal override uint Storable_GetId()
+        {
+            return 0x3F3u;
+        }
+
+        internal override void Storable_SaveData(CFile file)
+        {
+            // Mirrors:
+            // CFile::Write(file, this + 8, 1);
+            // CFile::Write(file, this + 0x0C, 0x10);
+            // CStorable::Storable_Save(*(CStorable **)(this + 0x28), file);
+
+            file.WriteByte(_bpp);
+
+            if (_storableBlock0C.Length != 0x10)
+            {
+                throw new InvalidOperationException("CBitmap storable header block must be 0x10 bytes.");
+            }
+
+            file.Write(_storableBlock0C, 0, 0x10);
+
+            _pixelData.Storable_Save(file);
+        }
+
         internal byte[]? Pixels8 => _pixels8;
+
+        internal BitmapFormat Format
+        {
+            get { return (BitmapFormat)_bpp; }
+        }
+
+        internal byte BitsPerPixel
+        {
+            get { return _bpp; }
+        }
 
 
         internal CBitmap()
@@ -83,14 +123,10 @@ namespace OpenVikings.NXBasics
 
         private void ResetCore()
         {
-            _bpp = 0x08;
+            _bpp = (byte)BitmapFormat.Indexed8;
 
             _memoryOwner = null;
             _externalBuffer = null;
-
-            _ptr8 = 0;
-            _ptr16 = 0;
-            _ptr32 = 0;
 
             _pitchPixels = 0;
             _bytesPerPixel = 1;
@@ -149,36 +185,76 @@ namespace OpenVikings.NXBasics
 
         internal CBitmap(CFile file) : this()
         {
-            byte[] tmp = new byte[1];
-            file.Read(tmp, 1);
-            _bpp = tmp[0];
+            byte[] bppBuffer = new byte[1];
+            int read = file.Read(bppBuffer, 1);
+            if (read != 1)
+            {
+                throw new InvalidOperationException("Unexpected end of file while reading bpp.");
+            }
+
+            _bpp = bppBuffer[0];
 
             int x = unchecked((int)file.ReadLong());
             int y = unchecked((int)file.ReadLong());
             int w = unchecked((int)file.ReadLong());
             int h = unchecked((int)file.ReadLong());
 
-            _rect.X = x;
-            _rect.Y = y;
-            _rect.Width = w;
-            _rect.Height = h;
+            if (w < 0 || h < 0)
+            {
+                throw new InvalidOperationException($"Invalid bitmap size {w}x{h} read from file.");
+            }
 
-            _memoryOwner = NXBasicsApi.XB_Storable_LoadObject(file);
+            // Keep SRectangle internal derived values consistent.
+            _rect.SetVariables(x, y, w, h);
+
+            CStorable loaded = NXBasicsApi.XB_Storable_LoadObject(file);
+            if (loaded is not CMemory memory)
+            {
+                throw new InvalidOperationException($"Expected CMemory for bitmap backing store, got '{loaded.GetType().Name}'.");
+            }
+
+            _memoryOwner = memory;
 
             _pitchPixels = _rect.Width;
-            _bytesPerPixel = (_bpp == 0x20) ? 4 : (_bpp == 0x10) ? 2 : 1;
+
+            if (_bpp == 0x20)
+            {
+                _bytesPerPixel = 4;
+            }
+            else if (_bpp == 0x10)
+            {
+                _bytesPerPixel = 2;
+            }
+            else
+            {
+                _bytesPerPixel = 1;
+            }
+
             _strideBytes = checked(_bytesPerPixel * _pitchPixels);
 
             _isVirtual = 0x00;
+            _virtualSrcX = 0;
+            _virtualSrcY = 0;
+            _virtualParent = null;
 
             L_SetRawMemoryPtr();
         }
 
+
         // NXBasics::CBitmap::~CBitmap()
         public void Dispose()
         {
-            _memoryOwner?.Dispose();
+            CMemory? owner = _memoryOwner;
             _memoryOwner = null;
+
+            owner?.Dispose();
+
+            _externalBuffer = null;
+            _virtualParent = null;
+
+            _pixels8 = null;
+            _pixels16 = null;
+            _pixels32 = null;
         }
         #endregion
 
@@ -216,6 +292,8 @@ namespace OpenVikings.NXBasics
             _virtualSrcX = 0;
             _virtualSrcY = 0;
             _virtualParent = null;
+
+            L_SetRawMemoryPtr();
         }
 
         // NXBasics::CBitmap::L_ConstructVirtual(NXBasics::CBitmap const&, NXBasics::SRectangle const&)
@@ -224,49 +302,49 @@ namespace OpenVikings.NXBasics
             _isVirtual = 0x01;
 
             _memoryOwner = null;
+            _externalBuffer = null;
+
+            _virtualSrcX = 0;
+            _virtualSrcY = 0;
+            _virtualParent = null;
 
             _bpp = source._bpp;
 
-            SRectangle local = requestedRect;
-
-            // In the original, this check used source._ptr8 != 0 to mean "source has pixel memory".
-            // In managed version, we treat "has memory" as: non-virtual source with a non-null owner (or virtual with a valid parent).
-            bool sourceHasPixels = source != null &&
-                                   (source._isVirtual != 0x00 ? source._virtualParent != null : source._memoryOwner != null);
-
-            if (!sourceHasPixels)
+            // Equivalent to: if (*(long*)(parent+0x30) != 0) ...
+            // In managed code, "has pixel memory" means: parent can resolve a backing buffer view.
+            if (!source.TryGetPixelBuffer(out _, out _, out _, out _))
             {
                 return;
             }
+
+            SRectangle local = requestedRect;
 
             if (!local.IsTouching(source._rect))
             {
                 return;
             }
 
-            if (local.Width <= 0 || local.Height <= 0) return;
             local.CutInside(source._rect);
 
-            // This is the same offset math as original (pixel index inside parent)
-            // NOTE: We keep it as int because your sizes are small; use checked to be safe.
-            int pixelIndex = checked(source._pitchPixels * local.Y + local.X);
+            if (local.Width <= 0 || local.Height <= 0)
+            {
+                return;
+            }
 
             _virtualSrcX = local.X;
             _virtualSrcY = local.Y;
             _virtualParent = source;
 
-            // Set this bitmap's rectangle to start at (0,0) with local's size.
-            // Use whichever exists in your SRectangle implementation:
+            // C++: SetVariables(thisRect, 0,0, local.w, local.h) + manual derived fields
+            // Managed: SetVariables must keep derived values consistent.
             _rect.SetVariables(0, 0, local.Width, local.Height);
-            // or: SRectangle.SetVariables(ref _rect, 0, 0, local.Width, local.Height);
 
+            // Inherit pitch/bytesPerPixel/stride from parent (C++ copies 0x48/0x4C/0x50).
             _pitchPixels = source._pitchPixels;
             _bytesPerPixel = source._bytesPerPixel;
             _strideBytes = source._strideBytes;
 
-            // Optional: if you want a cached byte-offset for faster addressing later:
-            // _virtualByteOffset = checked(pixelIndex * _bytesPerPixel);
-            _ = pixelIndex; // keep variable if you want to use it later
+            L_SetRawMemoryPtr();
         }
 
         // NXBasics::CBitmap::L_ConstructExternalMemory(...)
@@ -275,15 +353,15 @@ namespace OpenVikings.NXBasics
         internal void L_ConstructExternalMemory(uint width, uint height, byte bpp, byte[] externalPtr, uint pitchPixels)
         {
             _bpp = bpp;
-            _memoryOwner = null;
 
+            _memoryOwner = null;
             _externalBuffer = externalPtr;
 
-            if (bpp == 0x20)
+            if (_bpp == 0x20)
             {
                 _bytesPerPixel = 4;
             }
-            else if (bpp == 0x10)
+            else if (_bpp == 0x10)
             {
                 _bytesPerPixel = 2;
             }
@@ -293,7 +371,7 @@ namespace OpenVikings.NXBasics
             }
 
             _pitchPixels = checked((int)pitchPixels);
-            _strideBytes = _bytesPerPixel * _pitchPixels;
+            _strideBytes = checked(_bytesPerPixel * _pitchPixels);
 
             _rect.SetVariables(0, 0, checked((int)width), checked((int)height));
 
@@ -301,25 +379,70 @@ namespace OpenVikings.NXBasics
             _virtualSrcX = 0;
             _virtualSrcY = 0;
             _virtualParent = null;
+
+            L_SetRawMemoryPtr();
         }
 
         // NXBasics::CBitmap::L_SetRawMemoryPtr()
         internal void L_SetRawMemoryPtr()
         {
-            if (_memoryOwner == null)
+            if (_bpp == (byte)BitmapFormat.TrueColor32)
             {
+                _bytesPerPixel = 4;
+            }
+            else if (_bpp == (byte)BitmapFormat.HighColor16)
+            {
+                _bytesPerPixel = 2;
+            }
+            else
+            {
+                _bytesPerPixel = 1;
+                _bpp = (byte)BitmapFormat.Indexed8;
+            }
+
+            _strideBytes = checked(_bytesPerPixel * _pitchPixels);
+
+            if (!TryGetPixelBuffer(out byte[]? buffer, out int baseOffsetBytes, out int pitchPixels, out int bytesPerPixel))
+            {
+                _pixels8 = null;
+                _pixels16 = null;
+                _pixels32 = null;
                 return;
             }
 
-            int requiredBytes = checked(_strideBytes * _rect.Height);
-            if (_memoryOwner.Size < (uint)requiredBytes)
+            // Ensure internal layout matches the resolved buffer view.
+            if (bytesPerPixel != _bytesPerPixel || pitchPixels != _pitchPixels)
             {
-                throw new InvalidOperationException("CBitmap: memory owner buffer is smaller than expected for current layout.");
+                _bytesPerPixel = bytesPerPixel;
+                _pitchPixels = pitchPixels;
+                _strideBytes = checked(_bytesPerPixel * _pitchPixels);
             }
+
+            int requiredBytes = checked(_strideBytes * _rect.Height);
+            int availableBytes = buffer.Length - baseOffsetBytes;
+
+            if (availableBytes < requiredBytes)
+            {
+                throw new InvalidOperationException("CBitmap: backing buffer is smaller than expected for current layout.");
+            }
+
+            // Managed convenience views:
+            // Only 8-bit can be represented as byte[] without unsafe.
+            if (_bytesPerPixel == 1 && baseOffsetBytes == 0)
+            {
+                _pixels8 = buffer;
+            }
+            else
+            {
+                _pixels8 = null;
+            }
+
+            _pixels16 = null;
+            _pixels32 = null;
         }
 
         // NXBasics::CBitmap::L_FindMatchingColor(NXBasics::SColorRGB const&) const
-        private bool TryGetPixelBuffer(out byte[]? buffer, out int baseOffsetBytes, out int pitchPixels, out int bytesPerPixel)
+        internal bool TryGetPixelBuffer(out byte[]? buffer, out int baseOffsetBytes, out int pitchPixels, out int bytesPerPixel)
         {
             bytesPerPixel = _bytesPerPixel;
 
@@ -605,57 +728,54 @@ namespace OpenVikings.NXBasics
         #endregion
 
         #region NXBasics::CBitmap::GetHighColorTablePtr() || GetTrueColorTablePtr() || SetPalettePtr()
-        // NXBasics::CBitmap::GetHighColorTablePtr() const
         internal ushort[] GetHighColorTablePtr()
         {
-            return (_palette ?? CXBSystemManager.sPalettePtr).GetHighColorTablePtr();
+            CPalette palette = _palette ?? CXBSystemManager.sPalettePtr;
+
+            ushort[] table = palette.GetHighColorTablePtr();
+            return table ?? throw new InvalidOperationException("HighColor table pointer is null.");
         }
 
         internal uint[] GetTrueColorTablePtr()
         {
-            return (_palette ?? CXBSystemManager.sPalettePtr).GetTrueColorTablePtr();
+            CPalette palette = _palette ?? CXBSystemManager.sPalettePtr;
+
+            uint[] table = palette.GetTrueColorTablePtr();
+            return table ?? throw new InvalidOperationException("TrueColor table pointer is null.");
         }
 
-        // NXBasics::CBitmap::SetPalettePtr(NXBasics::CPalette*)
-        internal void SetPalettePtr(CPalette palette)
+        internal void SetPalettePtr(CPalette? palette)
         {
             _palette = palette;
         }
+
         #endregion
 
         #region NXBasics::CBitmap::Draw_GetPixel
         // NXBasics::CBitmap::Draw_GetPixel_Word(int, int) const
         internal ushort Draw_GetPixel_Word(int x, int y)
         {
-            if (_bpp != 0x10)
+            if (_bpp != (byte)BitmapFormat.HighColor16)
             {
                 return 0;
             }
 
-            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffsetBytes, out int pitchPixels, out int bytesPerPixel))
+            if (!TryGetPixelBuffer(out byte[]? buffer, out int baseOffsetBytes, out int pitchPixels, out int bytesPerPixel))
             {
                 return 0;
             }
 
-            if (bytesPerPixel != 2)
+            if (buffer == null || bytesPerPixel != 2)
             {
                 return 0;
             }
 
-            int left = _rect.X;
-            int top = _rect.Y;
-            int rightExclusive = checked(_rect.X + _rect.Width);
-            int bottomExclusive = checked(_rect.Y + _rect.Height);
-
-            if (x < left || x >= rightExclusive || y < top || y >= bottomExclusive)
+            if ((uint)x >= (uint)_rect.Width || (uint)y >= (uint)_rect.Height)
             {
                 return 0;
             }
 
-            int relX = x - left;
-            int relY = y - top;
-
-            int pixelIndex = checked(relY * pitchPixels + relX);
+            int pixelIndex = checked(y * pitchPixels + x);
             int byteIndex = checked(baseOffsetBytes + pixelIndex * 2);
 
             if ((uint)(byteIndex + 1) >= (uint)buffer.Length)
@@ -667,38 +787,29 @@ namespace OpenVikings.NXBasics
         }
 
         // NXBasics::CBitmap::Draw_GetPixel_Long(int, int) const
-        // NXBasics::CBitmap::Draw_GetPixel_Long(int, int) const
         internal uint Draw_GetPixel_Long(int x, int y)
         {
-            if (_bpp != 0x20)
+            if (_bpp != (byte)BitmapFormat.TrueColor32)
             {
                 return 0;
             }
 
-            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffsetBytes, out int pitchPixels, out int bytesPerPixel))
+            if (!TryGetPixelBuffer(out byte[]? buffer, out int baseOffsetBytes, out int pitchPixels, out int bytesPerPixel))
             {
                 return 0;
             }
 
-            if (bytesPerPixel != 4)
+            if (buffer == null || bytesPerPixel != 4)
             {
                 return 0;
             }
 
-            int left = _rect.X;
-            int top = _rect.Y;
-            int rightExclusive = checked(_rect.X + _rect.Width);
-            int bottomExclusive = checked(_rect.Y + _rect.Height);
-
-            if (x < left || x >= rightExclusive || y < top || y >= bottomExclusive)
+            if ((uint)x >= (uint)_rect.Width || (uint)y >= (uint)_rect.Height)
             {
                 return 0;
             }
 
-            int relX = x - left;
-            int relY = y - top;
-
-            int pixelIndex = checked(relY * pitchPixels + relX);
+            int pixelIndex = checked(y * pitchPixels + x);
             int byteIndex = checked(baseOffsetBytes + pixelIndex * 4);
 
             if ((uint)(byteIndex + 3) >= (uint)buffer.Length)
@@ -716,35 +827,27 @@ namespace OpenVikings.NXBasics
         // NXBasics::CBitmap::Draw_GetPixel(int, int) const
         internal byte Draw_GetPixel(int x, int y)
         {
-            if (_bpp != 0x08)
+            if (_bpp != (byte)BitmapFormat.Indexed8)
             {
                 return 0;
             }
 
-            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffsetBytes, out int pitchPixels, out int bytesPerPixel))
+            if (!TryGetPixelBuffer(out byte[]? buffer, out int baseOffsetBytes, out int pitchPixels, out int bytesPerPixel))
             {
                 return 0;
             }
 
-            if (bytesPerPixel != 1)
+            if (buffer == null || bytesPerPixel != 1)
             {
                 return 0;
             }
 
-            int left = _rect.X;
-            int top = _rect.Y;
-            int rightExclusive = checked(_rect.X + _rect.Width);
-            int bottomExclusive = checked(_rect.Y + _rect.Height);
-
-            if (x < left || x >= rightExclusive || y < top || y >= bottomExclusive)
+            if ((uint)x >= (uint)_rect.Width || (uint)y >= (uint)_rect.Height)
             {
                 return 0;
             }
 
-            int relX = x - left;
-            int relY = y - top;
-
-            int index = checked(baseOffsetBytes + relY * pitchPixels + relX);
+            int index = checked(baseOffsetBytes + y * pitchPixels + x);
             if ((uint)index >= (uint)buffer.Length)
             {
                 return 0;
@@ -755,10 +858,8 @@ namespace OpenVikings.NXBasics
         #endregion
 
         #region NXBasics::CBitmap::CopyIntoBitmap
+
         // NXBasics::CBitmap::CopyIntoBitmap(NXBasics::CBitmap const&, int, int) const
-        // NOTE:
-        // This is a *direct* structural translation. It references helpers you likely already have
-        // (XB_Tool_*_CopyBlock, tables, creators, rectangle ops, etc.)
         internal void CopyIntoBitmap(CBitmap destination, int dstX, int dstY)
         {
             if (destination == null)
@@ -766,41 +867,47 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            // Same behavior as your original: special full-bitmap conversions when rects match.
-            if (_bpp == 0x10 && destination._bpp == 0x20)
+            // Special-case whole bitmap conversions (original checks rectangle equality only and ignores dstX/dstY).
+            if (_bpp == (byte)BitmapFormat.HighColor16 && destination._bpp == (byte)BitmapFormat.TrueColor32)
             {
                 if (RectEquals(in _rect, in destination._rect) && _rect.Height > 0)
                 {
                     Convert16To32Whole(destination);
                 }
+
                 return;
             }
 
-            if (_bpp == 0x20 && destination._bpp == 0x10)
+            if (_bpp == (byte)BitmapFormat.TrueColor32 && destination._bpp == (byte)BitmapFormat.HighColor16)
             {
                 if (RectEquals(in _rect, in destination._rect) && _rect.Height > 0)
                 {
                     Convert32To16Whole(destination);
                 }
+
                 return;
             }
 
-            // Resolve pixel buffers (replaces ptr checks)
-            if (!TryGetPixelBuffer(out byte[] srcBuf, out int srcBase, out int srcPitch, out int srcBppBytes))
+            if (!TryGetPixelBuffer(out byte[]? srcBuf, out int srcBase, out int srcPitchPixels, out int srcBytesPerPixel))
             {
                 return;
             }
 
-            if (!destination.TryGetPixelBuffer(out byte[] dstBuf, out int dstBase, out int dstPitch, out int dstBppBytes))
+            if (!destination.TryGetPixelBuffer(out byte[]? dstBuf, out int dstBase, out int dstPitchPixels, out int dstBytesPerPixel))
             {
                 return;
             }
 
-            // Destination bounds in destination space: (0,0,width,height)
+            if (srcBuf == null || dstBuf == null)
+            {
+                return;
+            }
+
+            // Destination bounds: (0,0,width,height)
             SRectangle dstBounds = new();
             dstBounds.SetVariables(0, 0, destination._rect.Width, destination._rect.Height);
 
-            // Placing rectangle where this bitmap would be drawn into destination.
+            // Placing rectangle where THIS bitmap would be drawn into destination.
             SRectangle placing = new();
             placing.SetVariables(dstX, dstY, _rect.Width, _rect.Height);
 
@@ -819,61 +926,86 @@ namespace OpenVikings.NXBasics
             int copyWidth = placing.Width;
             int copyHeight = placing.Height;
 
-            // Source start inside THIS bitmap (relative to placement)
+            // Source start inside THIS bitmap (relative to placement).
             int srcX = placing.X - dstX;
             int srcY = placing.Y - dstY;
 
-            // Destination start
+            // Destination start.
             int dstStartX = placing.X;
             int dstStartY = placing.Y;
 
-            if (_bpp == 0x20 && destination._bpp == 0x20)
+            if (_bpp == (byte)BitmapFormat.TrueColor32 && destination._bpp == (byte)BitmapFormat.TrueColor32)
             {
-                int srcOffset = checked(srcBase + checked((srcY * srcPitch + srcX) * 4));
-                int dstOffset = checked(dstBase + checked((dstStartY * dstPitch + dstStartX) * 4));
-                CopyBlockRaw(srcBuf, srcOffset, srcPitch, dstBuf, dstOffset, dstPitch, copyWidth, copyHeight, 4);
-                return;
-            }
-
-            if (_bpp == 0x10 && destination._bpp == 0x10)
-            {
-                int srcOffset = checked(srcBase + checked((srcY * srcPitch + srcX) * 2));
-                int dstOffset = checked(dstBase + checked((dstStartY * dstPitch + dstStartX) * 2));
-                CopyBlockRaw(srcBuf, srcOffset, srcPitch, dstBuf, dstOffset, dstPitch, copyWidth, copyHeight, 2);
-                return;
-            }
-
-            if (_bpp == 0x08 && destination._bpp == 0x08)
-            {
-                int srcOffset = checked(srcBase + (srcY * srcPitch + srcX));
-                int dstOffset = checked(dstBase + (dstStartY * dstPitch + dstStartX));
-                CopyBlockRaw(srcBuf, srcOffset, srcPitch, dstBuf, dstOffset, dstPitch, copyWidth, copyHeight, 1);
-                return;
-            }
-
-            if (_bpp == 0x08 && destination._bpp == 0x20)
-            {
-                CPalette palette = _palette ?? CXBSystemManager.sPalettePtr;
-                uint[] table = palette.GetTrueColorTablePtr();
-                if (table == null)
+                if (srcBytesPerPixel != 4 || dstBytesPerPixel != 4)
                 {
                     return;
                 }
 
-                Convert8To32Block(srcBuf, srcBase, srcPitch, srcX, srcY, dstBuf, dstBase, dstPitch, dstStartX, dstStartY, copyWidth, copyHeight, table);
+                int srcOffset = checked(srcBase + checked((srcY * srcPitchPixels + srcX) * 4));
+                int dstOffset = checked(dstBase + checked((dstStartY * dstPitchPixels + dstStartX) * 4));
+                CopyBlockRaw(srcBuf, srcOffset, srcPitchPixels, dstBuf, dstOffset, dstPitchPixels, copyWidth, copyHeight, 4);
                 return;
             }
 
-            if (_bpp == 0x08 && destination._bpp == 0x10)
+            if (_bpp == (byte)BitmapFormat.HighColor16 && destination._bpp == (byte)BitmapFormat.HighColor16)
             {
-                CPalette palette = _palette ?? CXBSystemManager.sPalettePtr;
-                ushort[] table = palette.GetHighColorTablePtr();
-                if (table == null)
+                if (srcBytesPerPixel != 2 || dstBytesPerPixel != 2)
                 {
                     return;
                 }
 
-                Convert8To16Block(srcBuf, srcBase, srcPitch, srcX, srcY, dstBuf, dstBase, dstPitch, dstStartX, dstStartY, copyWidth, copyHeight, table);
+                int srcOffset = checked(srcBase + checked((srcY * srcPitchPixels + srcX) * 2));
+                int dstOffset = checked(dstBase + checked((dstStartY * dstPitchPixels + dstStartX) * 2));
+                CopyBlockRaw(srcBuf, srcOffset, srcPitchPixels, dstBuf, dstOffset, dstPitchPixels, copyWidth, copyHeight, 2);
+                return;
+            }
+
+            if (_bpp == (byte)BitmapFormat.Indexed8 && destination._bpp == (byte)BitmapFormat.Indexed8)
+            {
+                if (srcBytesPerPixel != 1 || dstBytesPerPixel != 1)
+                {
+                    return;
+                }
+
+                int srcOffset = checked(srcBase + (srcY * srcPitchPixels + srcX));
+                int dstOffset = checked(dstBase + (dstStartY * dstPitchPixels + dstStartX));
+                CopyBlockRaw(srcBuf, srcOffset, srcPitchPixels, dstBuf, dstOffset, dstPitchPixels, copyWidth, copyHeight, 1);
+                return;
+            }
+
+            if (_bpp == (byte)BitmapFormat.Indexed8 && destination._bpp == (byte)BitmapFormat.TrueColor32)
+            {
+                if (srcBytesPerPixel != 1 || dstBytesPerPixel != 4)
+                {
+                    return;
+                }
+
+                CPalette palette = _palette ?? CXBSystemManager.sPalettePtr;
+                uint[] table32 = palette.GetTrueColorTablePtr();
+                if (table32 == null)
+                {
+                    return;
+                }
+
+                Convert8To32Block(srcBuf, srcBase, srcPitchPixels, srcX, srcY, dstBuf, dstBase, dstPitchPixels, dstStartX, dstStartY, copyWidth, copyHeight, table32);
+                return;
+            }
+
+            if (_bpp == (byte)BitmapFormat.Indexed8 && destination._bpp == (byte)BitmapFormat.HighColor16)
+            {
+                if (srcBytesPerPixel != 1 || dstBytesPerPixel != 2)
+                {
+                    return;
+                }
+
+                CPalette palette = _palette ?? CXBSystemManager.sPalettePtr;
+                ushort[] table16 = palette.GetHighColorTablePtr();
+                if (table16 == null)
+                {
+                    return;
+                }
+
+                Convert8To16Block(srcBuf, srcBase, srcPitchPixels, srcX, srcY, dstBuf, dstBase, dstPitchPixels, dstStartX, dstStartY, copyWidth, copyHeight, table16);
                 return;
             }
         }
@@ -885,6 +1017,16 @@ namespace OpenVikings.NXBasics
 
         private static void CopyBlockRaw(byte[] src, int srcOffsetBytes, int srcPitchPixels, byte[] dst, int dstOffsetBytes, int dstPitchPixels, int widthPixels, int heightPixels, int bytesPerPixel)
         {
+            if (widthPixels <= 0 || heightPixels <= 0)
+            {
+                return;
+            }
+
+            if (bytesPerPixel != 1 && bytesPerPixel != 2 && bytesPerPixel != 4)
+            {
+                return;
+            }
+
             int srcRowStrideBytes = checked(srcPitchPixels * bytesPerPixel);
             int dstRowStrideBytes = checked(dstPitchPixels * bytesPerPixel);
             int rowBytes = checked(widthPixels * bytesPerPixel);
@@ -893,21 +1035,37 @@ namespace OpenVikings.NXBasics
             {
                 int s = checked(srcOffsetBytes + y * srcRowStrideBytes);
                 int d = checked(dstOffsetBytes + y * dstRowStrideBytes);
+
+                if ((uint)s >= (uint)src.Length || (uint)d >= (uint)dst.Length)
+                {
+                    return;
+                }
+
+                if (s + rowBytes > src.Length || d + rowBytes > dst.Length)
+                {
+                    return;
+                }
+
                 Buffer.BlockCopy(src, s, dst, d, rowBytes);
             }
         }
 
-        private static void Convert8To16Block(byte[] src, int srcBase, int srcPitch, int srcX, int srcY, byte[] dst, int dstBase, int dstPitch, int dstX, int dstY, int width, int height, ushort[] table)
+        private static void Convert8To16Block(byte[] src, int srcBase, int srcPitchPixels, int srcX, int srcY, byte[] dst, int dstBase, int dstPitchPixels, int dstX, int dstY, int width, int height, ushort[] table16)
         {
+            if (width <= 0 || height <= 0)
+            {
+                return;
+            }
+
             for (int y = 0; y < height; y++)
             {
-                int srcRow = checked(srcBase + (srcY + y) * srcPitch + srcX);
-                int dstRow = checked(dstBase + checked(((dstY + y) * dstPitch + dstX) * 2));
+                int srcRow = checked(srcBase + (srcY + y) * srcPitchPixels + srcX);
+                int dstRow = checked(dstBase + checked(((dstY + y) * dstPitchPixels + dstX) * 2));
 
                 for (int x = 0; x < width; x++)
                 {
                     byte idx = src[srcRow + x];
-                    ushort v = table[idx];
+                    ushort v = table16[idx];
 
                     int di = dstRow + x * 2;
                     dst[di + 0] = (byte)(v & 0xFF);
@@ -916,17 +1074,22 @@ namespace OpenVikings.NXBasics
             }
         }
 
-        private static void Convert8To32Block(byte[] src, int srcBase, int srcPitch, int srcX, int srcY, byte[] dst, int dstBase, int dstPitch, int dstX, int dstY, int width, int height, uint[] table)
+        private static void Convert8To32Block(byte[] src, int srcBase, int srcPitchPixels, int srcX, int srcY, byte[] dst, int dstBase, int dstPitchPixels, int dstX, int dstY, int width, int height, uint[] table32)
         {
+            if (width <= 0 || height <= 0)
+            {
+                return;
+            }
+
             for (int y = 0; y < height; y++)
             {
-                int srcRow = checked(srcBase + (srcY + y) * srcPitch + srcX);
-                int dstRow = checked(dstBase + checked(((dstY + y) * dstPitch + dstX) * 4));
+                int srcRow = checked(srcBase + (srcY + y) * srcPitchPixels + srcX);
+                int dstRow = checked(dstBase + checked(((dstY + y) * dstPitchPixels + dstX) * 4));
 
                 for (int x = 0; x < width; x++)
                 {
                     byte idx = src[srcRow + x];
-                    uint v = table[idx];
+                    uint v = table32[idx];
 
                     int di = dstRow + x * 4;
                     dst[di + 0] = (byte)(v & 0xFF);
@@ -939,18 +1102,46 @@ namespace OpenVikings.NXBasics
 
         private void Convert16To32Whole(CBitmap destination)
         {
-            if (!TryGetPixelBuffer(out byte[] srcBuf, out int srcBase, out int srcPitch, out int srcBppBytes))
+            if (destination == null)
             {
                 return;
             }
 
-            if (!destination.TryGetPixelBuffer(out byte[] dstBuf, out int dstBase, out int dstPitch, out int dstBppBytes))
+            if (_bpp != (byte)BitmapFormat.HighColor16 || destination._bpp != (byte)BitmapFormat.TrueColor32)
             {
                 return;
             }
 
-            // Expect 16bpp source, 32bpp dest
-            if (_bpp != 0x10 || destination._bpp != 0x20)
+            if (!TryGetPixelBuffer(out byte[]? srcBuf, out int srcBase, out int srcPitchBytes, out int srcBytesPerPixel))
+            {
+                return;
+            }
+
+            if (!destination.TryGetPixelBuffer(out byte[]? dstBuf, out int dstBase, out int dstPitchBytes, out int dstBytesPerPixel))
+            {
+                return;
+            }
+
+            if (srcBuf == null || dstBuf == null || srcBytesPerPixel != 2 || dstBytesPerPixel != 4)
+            {
+                return;
+            }
+
+            CHighColorCreator? highColorCreator = CXBSystemManager.sHighColorCreatorPtr;
+            CTrueColorCreator? trueColorCreator = CXBSystemManager.sTrueColorCreatorPtr;
+
+            if (highColorCreator == null || trueColorCreator == null)
+            {
+                return;
+            }
+
+            if (!highColorCreator.IsEnabled || !trueColorCreator.IsEnabled)
+            {
+                return;
+            }
+
+            uint[] table = highColorCreator.GetTrueColorConvertTablePtr(trueColorCreator);
+            if (table.Length != 65536)
             {
                 return;
             }
@@ -958,427 +1149,120 @@ namespace OpenVikings.NXBasics
             int width = _rect.Width;
             int height = _rect.Height;
 
-            // If you already have a palette-table for 16->32, use it here.
-            // Otherwise this is a placeholder conversion policy (needs your engine's exact format).
-            // For now: treat 16-bit as 5-6-5 and expand (common).
+            if (destination._rect.Width < width)
+            {
+                width = destination._rect.Width;
+            }
+
+            if (destination._rect.Height < height)
+            {
+                height = destination._rect.Height;
+            }
+
+            int srcStrideBytes = srcPitchBytes;
+            int dstStrideBytes = dstPitchBytes;
+
             for (int y = 0; y < height; y++)
             {
-                int srcRow = checked(srcBase + y * checked(srcPitch * 2));
-                int dstRow = checked(dstBase + y * checked(dstPitch * 4));
+                int srcRow = checked(srcBase + y * srcStrideBytes);
+                int dstRow = checked(dstBase + y * dstStrideBytes);
 
                 for (int x = 0; x < width; x++)
                 {
-                    int si = srcRow + x * 2;
-                    ushort v = (ushort)(srcBuf[si + 0] | (srcBuf[si + 1] << 8));
+                    int si = checked(srcRow + x * 2);
 
-                    uint rgb = Convert565To888(v);
+                    ushort w = (ushort)(srcBuf[si + 0] | (srcBuf[si + 1] << 8));
+                    uint color = table[w];
 
-                    int di = dstRow + x * 4;
-                    dstBuf[di + 0] = (byte)(rgb & 0xFF);
-                    dstBuf[di + 1] = (byte)((rgb >> 8) & 0xFF);
-                    dstBuf[di + 2] = (byte)((rgb >> 16) & 0xFF);
-                    dstBuf[di + 3] = (byte)((rgb >> 24) & 0xFF);
+                    int di = checked(dstRow + x * 4);
+
+                    // Destination is a raw 32-bit word (layout is defined by CTrueColorCreator masks).
+                    dstBuf[di + 0] = (byte)(color & 0xFFu);
+                    dstBuf[di + 1] = (byte)((color >> 8) & 0xFFu);
+                    dstBuf[di + 2] = (byte)((color >> 16) & 0xFFu);
+                    dstBuf[di + 3] = (byte)((color >> 24) & 0xFFu);
                 }
             }
         }
 
         private void Convert32To16Whole(CBitmap destination)
         {
-            if (!TryGetPixelBuffer(out byte[] srcBuf, out int srcBase, out int srcPitch, out int srcBppBytes))
+            if (_bpp != (byte)BitmapFormat.TrueColor32 || destination._bpp != (byte)BitmapFormat.HighColor16)
             {
                 return;
             }
 
-            if (!destination.TryGetPixelBuffer(out byte[] dstBuf, out int dstBase, out int dstPitch, out int dstBppBytes))
+            if (!TryGetPixelBuffer(out byte[]? srcBuf, out int srcBase, out int srcPitchPixels, out int srcBytesPerPixel))
             {
                 return;
             }
 
-            // Expect 32bpp source, 16bpp dest
-            if (_bpp != 0x20 || destination._bpp != 0x10)
+            if (!destination.TryGetPixelBuffer(out byte[]? dstBuf, out int dstBase, out int dstPitchPixels, out int dstBytesPerPixel))
             {
                 return;
             }
+
+            if (srcBuf == null || dstBuf == null || srcBytesPerPixel != 4 || dstBytesPerPixel != 2)
+            {
+                return;
+            }
+
+            CHighColorCreator highColorCreator = CXBSystemManager.sHighColorCreatorPtr;
 
             int width = _rect.Width;
             int height = _rect.Height;
 
             for (int y = 0; y < height; y++)
             {
-                int srcRow = checked(srcBase + y * checked(srcPitch * 4));
-                int dstRow = checked(dstBase + y * checked(dstPitch * 2));
-
                 for (int x = 0; x < width; x++)
                 {
-                    int si = srcRow + x * 4;
-                    byte b = srcBuf[si + 0];
-                    byte g = srcBuf[si + 1];
-                    byte r = srcBuf[si + 2];
+                    uint c = ReadPixel32(srcBuf, srcBase, checked(srcPitchPixels * 4), x, y);
 
-                    ushort v = Convert888To565(r, g, b);
+                    // Matches original call-site: GetHighColorWord(r,g,b) with r=(c>>16), g=(c>>8), b=(c>>0).
+                    byte r = (byte)((c >> 16) & 0xFF);
+                    byte g = (byte)((c >> 8) & 0xFF);
+                    byte b = (byte)(c & 0xFF);
 
-                    int di = dstRow + x * 2;
-                    dstBuf[di + 0] = (byte)(v & 0xFF);
-                    dstBuf[di + 1] = (byte)((v >> 8) & 0xFF);
+                    ushort w = highColorCreator.GetHighColorWord(r, g, b);
+                    WritePixel16(dstBuf, dstBase, checked(dstPitchPixels * 2), x, y, w);
                 }
             }
         }
 
-        private static uint Convert565To888(ushort v)
-        {
-            // Common 5-6-5 expand. If engine uses a different 16-bit layout, replace this.
-            uint r5 = (uint)((v >> 11) & 0x1F);
-            uint g6 = (uint)((v >> 5) & 0x3F);
-            uint b5 = (uint)(v & 0x1F);
+        // --- 8-bit mapped blits (single implementation; duplicates removed) ---
 
-            uint r8 = (r5 << 3) | (r5 >> 2);
-            uint g8 = (g6 << 2) | (g6 >> 4);
-            uint b8 = (b5 << 3) | (b5 >> 2);
-
-            // BGRA in little endian bytes (matches our FillBlockLongLE writing order)
-            return (0xFFu << 24) | (r8 << 16) | (g8 << 8) | b8;
-        }
-
-        private static ushort Convert888To565(byte r, byte g, byte b)
-        {
-            ushort r5 = (ushort)(r >> 3);
-            ushort g6 = (ushort)(g >> 2);
-            ushort b5 = (ushort)(b >> 3);
-
-            return (ushort)((r5 << 11) | (g6 << 5) | b5);
-        }
-
-        // NXBasics::CBitmap::CopyIntoBitmap_Remap(NXBasics::CBitmap const&, int, int, unsigned char const*) const
-        // NXBasics::CBitmap::CopyIntoBitmap_Remap(NXBasics::CBitmap const&, int, int, unsigned char const*) const
-        internal void CopyIntoBitmap_Remap(CBitmap destination, int dstX, int dstY, byte[] remap)
-        {
-            if (destination == null)
-            {
-                return;
-            }
-
-            if (remap == null || remap.Length < 256)
-            {
-                return;
-            }
-
-            if (_bpp != 0x08)
-            {
-                return;
-            }
-
-            if (!TryGetPixelBuffer(out byte[] srcBuf, out int srcBase, out int srcPitch, out int srcBytesPerPixel))
-            {
-                return;
-            }
-
-            if (!destination.TryGetPixelBuffer(out byte[] dstBuf, out int dstBase, out int dstPitch, out int dstBytesPerPixel))
-            {
-                return;
-            }
-
-            // Destination bounds in destination space.
-            SRectangle dstBounds = new();
-            dstBounds.SetVariables(0, 0, destination._rect.Width, destination._rect.Height);
-
-            // Where we want to place this bitmap.
-            SRectangle placing = new();
-            placing.SetVariables(dstX, dstY, _rect.Width, _rect.Height);
-
-            if (!placing.IsTouching(dstBounds))
-            {
-                return;
-            }
-
-            placing.CutInside(dstBounds);
-
-            if (placing.Width <= 0 || placing.Height <= 0)
-            {
-                return;
-            }
-
-            int copyWidth = placing.Width;
-            int copyHeight = placing.Height;
-
-            int srcX = placing.X - dstX;
-            int srcY = placing.Y - dstY;
-
-            int dstStartX = placing.X;
-            int dstStartY = placing.Y;
-
-            if (destination._bpp == 0x20)
-            {
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
-                uint[] table = pal.GetTrueColorTablePtr();
-                if (table == null)
-                {
-                    return;
-                }
-
-                Remap8To32Block(srcBuf, srcBase, srcPitch, srcX, srcY,
-                                dstBuf, dstBase, dstPitch, dstStartX, dstStartY,
-                                copyWidth, copyHeight, remap, table);
-                return;
-            }
-
-            if (destination._bpp == 0x10)
-            {
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
-                ushort[] table = pal.GetHighColorTablePtr();
-                if (table == null)
-                {
-                    return;
-                }
-
-                Remap8To16Block(srcBuf, srcBase, srcPitch, srcX, srcY,
-                                dstBuf, dstBase, dstPitch, dstStartX, dstStartY,
-                                copyWidth, copyHeight, remap, table);
-                return;
-            }
-
-            if (destination._bpp == 0x08)
-            {
-                Remap8To8Block(srcBuf, srcBase, srcPitch, srcX, srcY,
-                               dstBuf, dstBase, dstPitch, dstStartX, dstStartY,
-                               copyWidth, copyHeight, remap);
-            }
-        }
-
-        private static void Remap8To8Block(byte[] src, int srcBase, int srcPitch, int srcX, int srcY,
-                                           byte[] dst, int dstBase, int dstPitch, int dstX, int dstY,
-                                           int width, int height, byte[] remap)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                int srcRow = checked(srcBase + (srcY + y) * srcPitch + srcX);
-                int dstRow = checked(dstBase + (dstY + y) * dstPitch + dstX);
-
-                for (int x = 0; x < width; x++)
-                {
-                    byte idx = src[srcRow + x];
-                    dst[dstRow + x] = remap[idx];
-                }
-            }
-        }
-
-        private static void Remap8To16Block(byte[] src, int srcBase, int srcPitch, int srcX, int srcY,
-                                            byte[] dst, int dstBase, int dstPitch, int dstX, int dstY,
-                                            int width, int height, byte[] remap, ushort[] table)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                int srcRow = checked(srcBase + (srcY + y) * srcPitch + srcX);
-                int dstRow = checked(dstBase + checked(((dstY + y) * dstPitch + dstX) * 2));
-
-                for (int x = 0; x < width; x++)
-                {
-                    byte idx = remap[src[srcRow + x]];
-                    ushort v = table[idx];
-
-                    int di = dstRow + x * 2;
-                    dst[di + 0] = (byte)(v & 0xFF);
-                    dst[di + 1] = (byte)((v >> 8) & 0xFF);
-                }
-            }
-        }
-
-        private static void Remap8To32Block(byte[] src, int srcBase, int srcPitch, int srcX, int srcY,
-                                            byte[] dst, int dstBase, int dstPitch, int dstX, int dstY,
-                                            int width, int height, byte[] remap, uint[] table)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                int srcRow = checked(srcBase + (srcY + y) * srcPitch + srcX);
-                int dstRow = checked(dstBase + checked(((dstY + y) * dstPitch + dstX) * 4));
-
-                for (int x = 0; x < width; x++)
-                {
-                    byte idx = remap[src[srcRow + x]];
-                    uint v = table[idx];
-
-                    int di = dstRow + x * 4;
-                    dst[di + 0] = (byte)(v & 0xFF);
-                    dst[di + 1] = (byte)((v >> 8) & 0xFF);
-                    dst[di + 2] = (byte)((v >> 16) & 0xFF);
-                    dst[di + 3] = (byte)((v >> 24) & 0xFF);
-                }
-            }
-        }
-
-
-        // NXBasics::CBitmap::CopyIntoBitmap_RemapTwice(NXBasics::CBitmap const&, int, int, unsigned char const*, unsigned char const*) const
-        // NXBasics::CBitmap::CopyIntoBitmap_RemapTwice(...)
-        // remapTwice: idx' = remapB[ remapA[idx] ]
-        internal void CopyIntoBitmap_RemapTwice(CBitmap destination, int dstX, int dstY, byte[] remapA, byte[] remapB)
-        {
-            if (destination == null)
-            {
-                return;
-            }
-
-            if (remapA == null || remapA.Length < 256)
-            {
-                return;
-            }
-
-            if (remapB == null || remapB.Length < 256)
-            {
-                return;
-            }
-
-            if (_bpp != 0x08)
-            {
-                return;
-            }
-
-            if (!TryGetPixelBuffer(out byte[] srcBuf, out int srcBase, out int srcPitch, out int srcBytesPerPixel))
-            {
-                return;
-            }
-
-            if (!destination.TryGetPixelBuffer(out byte[] dstBuf, out int dstBase, out int dstPitch, out int dstBytesPerPixel))
-            {
-                return;
-            }
-
-            SRectangle dstBounds = new();
-            dstBounds.SetVariables(0, 0, destination._rect.Width, destination._rect.Height);
-
-            SRectangle placing = new();
-            placing.SetVariables(dstX, dstY, _rect.Width, _rect.Height);
-
-            if (!placing.IsTouching(dstBounds))
-            {
-                return;
-            }
-
-            placing.CutInside(dstBounds);
-
-            if (placing.Width <= 0 || placing.Height <= 0)
-            {
-                return;
-            }
-
-            int copyWidth = placing.Width;
-            int copyHeight = placing.Height;
-
-            int srcX = placing.X - dstX;
-            int srcY = placing.Y - dstY;
-
-            int dstStartX = placing.X;
-            int dstStartY = placing.Y;
-
-            if (destination._bpp == 0x20)
-            {
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
-                uint[] table = pal.GetTrueColorTablePtr();
-                if (table == null)
-                {
-                    return;
-                }
-
-                RemapTwice8To32Block(srcBuf, srcBase, srcPitch, srcX, srcY,
-                                     dstBuf, dstBase, dstPitch, dstStartX, dstStartY,
-                                     copyWidth, copyHeight, remapA, remapB, table);
-                return;
-            }
-
-            if (destination._bpp == 0x10)
-            {
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
-                ushort[] table = pal.GetHighColorTablePtr();
-                if (table == null)
-                {
-                    return;
-                }
-
-                RemapTwice8To16Block(srcBuf, srcBase, srcPitch, srcX, srcY,
-                                     dstBuf, dstBase, dstPitch, dstStartX, dstStartY,
-                                     copyWidth, copyHeight, remapA, remapB, table);
-                return;
-            }
-
-            if (destination._bpp == 0x08)
-            {
-                RemapTwice8To8Block(srcBuf, srcBase, srcPitch, srcX, srcY,
-                                    dstBuf, dstBase, dstPitch, dstStartX, dstStartY,
-                                    copyWidth, copyHeight, remapA, remapB);
-            }
-        }
-
-        private static void RemapTwice8To8Block(byte[] src, int srcBase, int srcPitch, int srcX, int srcY,
-                                                byte[] dst, int dstBase, int dstPitch, int dstX, int dstY,
-                                                int width, int height, byte[] remapA, byte[] remapB)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                int srcRow = checked(srcBase + (srcY + y) * srcPitch + srcX);
-                int dstRow = checked(dstBase + (dstY + y) * dstPitch + dstX);
-
-                for (int x = 0; x < width; x++)
-                {
-                    byte idx = src[srcRow + x];
-                    byte a = remapA[idx];
-                    byte b = remapB[a];
-                    dst[dstRow + x] = b;
-                }
-            }
-        }
-
-        private static void RemapTwice8To16Block(byte[] src, int srcBase, int srcPitch, int srcX, int srcY,
-                                                 byte[] dst, int dstBase, int dstPitch, int dstX, int dstY,
-                                                 int width, int height, byte[] remapA, byte[] remapB, ushort[] table)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                int srcRow = checked(srcBase + (srcY + y) * srcPitch + srcX);
-                int dstRow = checked(dstBase + checked(((dstY + y) * dstPitch + dstX) * 2));
-
-                for (int x = 0; x < width; x++)
-                {
-                    byte idx = src[srcRow + x];
-                    byte a = remapA[idx];
-                    byte b = remapB[a];
-
-                    ushort v = table[b];
-
-                    int di = dstRow + x * 2;
-                    dst[di + 0] = (byte)(v & 0xFF);
-                    dst[di + 1] = (byte)((v >> 8) & 0xFF);
-                }
-            }
-        }
-
-        private static void RemapTwice8To32Block(byte[] src, int srcBase, int srcPitch, int srcX, int srcY,
-                                                 byte[] dst, int dstBase, int dstPitch, int dstX, int dstY,
-                                                 int width, int height, byte[] remapA, byte[] remapB, uint[] table)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                int srcRow = checked(srcBase + (srcY + y) * srcPitch + srcX);
-                int dstRow = checked(dstBase + checked(((dstY + y) * dstPitch + dstX) * 4));
-
-                for (int x = 0; x < width; x++)
-                {
-                    byte idx = src[srcRow + x];
-                    byte a = remapA[idx];
-                    byte b = remapB[a];
-
-                    uint v = table[b];
-
-                    int di = dstRow + x * 4;
-                    dst[di + 0] = (byte)(v & 0xFF);
-                    dst[di + 1] = (byte)((v >> 8) & 0xFF);
-                    dst[di + 2] = (byte)((v >> 16) & 0xFF);
-                    dst[di + 3] = (byte)((v >> 24) & 0xFF);
-                }
-            }
-        }
-
-
-        // NXBasics::CBitmap::CopyIntoBitmap_ColorKeyed(...)
         internal void CopyIntoBitmap_ColorKeyed(CBitmap destination, int dstX, int dstY, byte colorKey)
         {
+            CopyIntoBitmap_8BitMappedCore(destination, dstX, dstY, true, colorKey, null, null);
+        }
+
+        internal void CopyIntoBitmap_ColorKeyed_Remap(CBitmap destination, int dstX, int dstY, byte colorKey, byte[] remap)
+        {
+            if (remap == null || remap.Length < 256)
+            {
+                return;
+            }
+
+            CopyIntoBitmap_8BitMappedCore(destination, dstX, dstY, true, colorKey, remap, null);
+        }
+
+        internal void CopyIntoBitmap_ColorKeyed_RemapTwice(CBitmap destination, int dstX, int dstY, byte colorKey, byte[] remapA, byte[] remapB)
+        {
+            if (remapA == null || remapA.Length < 256)
+            {
+                return;
+            }
+
+            if (remapB == null || remapB.Length < 256)
+            {
+                return;
+            }
+
+            CopyIntoBitmap_8BitMappedCore(destination, dstX, dstY, true, colorKey, remapA, remapB);
+        }
+
+        private void CopyIntoBitmap_8BitMappedCore(CBitmap destination, int dstX, int dstY, bool useColorKey, byte colorKey, byte[]? remapA, byte[]? remapB)
+        {
             if (destination == null)
             {
                 return;
@@ -1389,12 +1273,22 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            if (!TryGetPixelBuffer(out byte[] srcBuf, out int srcBase, out int srcPitch, out int srcBytesPerPixel))
+            if (!TryGetPixelBuffer(out byte[]? srcBuf, out int srcBase, out int srcPitchPixels, out int srcBytesPerPixel))
             {
                 return;
             }
 
-            if (!destination.TryGetPixelBuffer(out byte[] dstBuf, out int dstBase, out int dstPitch, out int dstBytesPerPixel))
+            if (srcBuf == null || srcBytesPerPixel != 1)
+            {
+                return;
+            }
+
+            if (!destination.TryGetPixelBuffer(out byte[]? dstBuf, out int dstBase, out int dstPitchPixels, out int dstBytesPerPixel))
+            {
+                return;
+            }
+
+            if (dstBuf == null)
             {
                 return;
             }
@@ -1426,82 +1320,99 @@ namespace OpenVikings.NXBasics
             int dstStartX = placing.X;
             int dstStartY = placing.Y;
 
-            if (destination._bpp == 0x20)
+            if (destination._bpp == 0x08)
             {
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
-                uint[] table = pal.GetTrueColorTablePtr();
-                if (table == null)
+                if (dstBytesPerPixel != 1)
                 {
                     return;
                 }
 
-                ColorKey8To32Block(srcBuf, srcBase, srcPitch, srcX, srcY,
-                                   dstBuf, dstBase, dstPitch, dstStartX, dstStartY,
-                                   copyWidth, copyHeight, colorKey, table);
+                Blit8_MappedTo8(srcBuf, srcBase, srcPitchPixels, srcX, srcY,
+                                dstBuf, dstBase, dstPitchPixels, dstStartX, dstStartY,
+                                copyWidth, copyHeight, colorKey, useColorKey, remapA, remapB);
                 return;
             }
+
+            CPalette palette = _palette ?? CXBSystemManager.sPalettePtr;
 
             if (destination._bpp == 0x10)
             {
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
-                ushort[] table = pal.GetHighColorTablePtr();
-                if (table == null)
+                if (dstBytesPerPixel != 2)
                 {
                     return;
                 }
 
-                ColorKey8To16Block(srcBuf, srcBase, srcPitch, srcX, srcY,
-                                   dstBuf, dstBase, dstPitch, dstStartX, dstStartY,
-                                   copyWidth, copyHeight, colorKey, table);
+                ushort[] table16 = palette.GetHighColorTablePtr();
+                if (table16 == null)
+                {
+                    return;
+                }
+
+                Blit8_MappedTo16(srcBuf, srcBase, srcPitchPixels, srcX, srcY,
+                                 dstBuf, dstBase, dstPitchPixels, dstStartX, dstStartY,
+                                 copyWidth, copyHeight, colorKey, useColorKey, remapA, remapB, table16);
                 return;
             }
 
-            if (destination._bpp == 0x08)
+            if (destination._bpp == 0x20)
             {
-                ColorKey8To8Block(srcBuf, srcBase, srcPitch, srcX, srcY,
-                                  dstBuf, dstBase, dstPitch, dstStartX, dstStartY,
-                                  copyWidth, copyHeight, colorKey);
-            }
-        }
-
-        private static void ColorKey8To8Block(byte[] src, int srcBase, int srcPitch, int srcX, int srcY,
-                                              byte[] dst, int dstBase, int dstPitch, int dstX, int dstY,
-                                              int width, int height, byte colorKey)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                int srcRow = checked(srcBase + (srcY + y) * srcPitch + srcX);
-                int dstRow = checked(dstBase + (dstY + y) * dstPitch + dstX);
-
-                for (int x = 0; x < width; x++)
+                if (dstBytesPerPixel != 4)
                 {
-                    byte idx = src[srcRow + x];
-                    if (idx != colorKey)
-                    {
-                        dst[dstRow + x] = idx;
-                    }
+                    return;
                 }
+
+                uint[] table32 = palette.GetTrueColorTablePtr();
+                if (table32 == null)
+                {
+                    return;
+                }
+
+                Blit8_MappedTo32(srcBuf, srcBase, srcPitchPixels, srcX, srcY,
+                                 dstBuf, dstBase, dstPitchPixels, dstStartX, dstStartY,
+                                 copyWidth, copyHeight, colorKey, useColorKey, remapA, remapB, table32);
             }
         }
 
-        private static void ColorKey8To16Block(byte[] src, int srcBase, int srcPitch, int srcX, int srcY,
-                                               byte[] dst, int dstBase, int dstPitch, int dstX, int dstY,
-                                               int width, int height, byte colorKey, ushort[] table)
+        private static void Blit8_MappedTo8(byte[] src, int srcBase, int srcPitchPixels, int srcX, int srcY, byte[] dst, int dstBase, int dstPitchPixels, int dstX, int dstY, int width, int height, byte colorKey, bool useColorKey, byte[]? remapA, byte[]? remapB)
         {
             for (int y = 0; y < height; y++)
             {
-                int srcRow = checked(srcBase + (srcY + y) * srcPitch + srcX);
-                int dstRow = checked(dstBase + checked(((dstY + y) * dstPitch + dstX) * 2));
+                int srcRow = checked(srcBase + (srcY + y) * srcPitchPixels + srcX);
+                int dstRow = checked(dstBase + (dstY + y) * dstPitchPixels + dstX);
 
                 for (int x = 0; x < width; x++)
                 {
                     byte idx = src[srcRow + x];
-                    if (idx == colorKey)
+
+                    if (useColorKey && idx == colorKey)
                     {
                         continue;
                     }
 
-                    ushort v = table[idx];
+                    idx = ApplyRemap(idx, remapA, remapB);
+                    dst[dstRow + x] = idx;
+                }
+            }
+        }
+
+        private static void Blit8_MappedTo16(byte[] src, int srcBase, int srcPitchPixels, int srcX, int srcY, byte[] dst, int dstBase, int dstPitchPixels, int dstX, int dstY, int width, int height, byte colorKey, bool useColorKey, byte[]? remapA, byte[]? remapB, ushort[] table16)
+        {
+            for (int y = 0; y < height; y++)
+            {
+                int srcRow = checked(srcBase + (srcY + y) * srcPitchPixels + srcX);
+                int dstRow = checked(dstBase + checked(((dstY + y) * dstPitchPixels + dstX) * 2));
+
+                for (int x = 0; x < width; x++)
+                {
+                    byte idx = src[srcRow + x];
+
+                    if (useColorKey && idx == colorKey)
+                    {
+                        continue;
+                    }
+
+                    idx = ApplyRemap(idx, remapA, remapB);
+                    ushort v = table16[idx];
 
                     int di = dstRow + x * 2;
                     dst[di + 0] = (byte)(v & 0xFF);
@@ -1510,24 +1421,24 @@ namespace OpenVikings.NXBasics
             }
         }
 
-        private static void ColorKey8To32Block(byte[] src, int srcBase, int srcPitch, int srcX, int srcY,
-                                               byte[] dst, int dstBase, int dstPitch, int dstX, int dstY,
-                                               int width, int height, byte colorKey, uint[] table)
+        private static void Blit8_MappedTo32(byte[] src, int srcBase, int srcPitchPixels, int srcX, int srcY, byte[] dst, int dstBase, int dstPitchPixels, int dstX, int dstY, int width, int height, byte colorKey, bool useColorKey, byte[]? remapA, byte[]? remapB, uint[] table32)
         {
             for (int y = 0; y < height; y++)
             {
-                int srcRow = checked(srcBase + (srcY + y) * srcPitch + srcX);
-                int dstRow = checked(dstBase + checked(((dstY + y) * dstPitch + dstX) * 4));
+                int srcRow = checked(srcBase + (srcY + y) * srcPitchPixels + srcX);
+                int dstRow = checked(dstBase + checked(((dstY + y) * dstPitchPixels + dstX) * 4));
 
                 for (int x = 0; x < width; x++)
                 {
                     byte idx = src[srcRow + x];
-                    if (idx == colorKey)
+
+                    if (useColorKey && idx == colorKey)
                     {
                         continue;
                     }
 
-                    uint v = table[idx];
+                    idx = ApplyRemap(idx, remapA, remapB);
+                    uint v = table32[idx];
 
                     int di = dstRow + x * 4;
                     dst[di + 0] = (byte)(v & 0xFF);
@@ -1538,349 +1449,19 @@ namespace OpenVikings.NXBasics
             }
         }
 
-        // NXBasics::CBitmap::CopyIntoBitmap_ColorKeyed_Remap(...)
-        internal void CopyIntoBitmap_ColorKeyed_Remap(CBitmap destination, int dstX, int dstY, byte colorKey, byte[] remap)
+        private static byte ApplyRemap(byte index, byte[]? remapA, byte[]? remapB)
         {
-            if (destination == null)
+            if (remapA != null)
             {
-                return;
+                index = remapA[index];
             }
 
-            if (remap == null || remap.Length < 256)
+            if (remapB != null)
             {
-                return;
+                index = remapB[index];
             }
 
-            if (_bpp != 0x08)
-            {
-                return;
-            }
-
-            if (!TryGetPixelBuffer(out byte[] srcBuf, out int srcBase, out int srcPitch, out int srcBytesPerPixel))
-            {
-                return;
-            }
-
-            if (!destination.TryGetPixelBuffer(out byte[] dstBuf, out int dstBase, out int dstPitch, out int dstBytesPerPixel))
-            {
-                return;
-            }
-
-            SRectangle dstBounds = new SRectangle();
-            dstBounds.SetVariables(0, 0, destination._rect.Width, destination._rect.Height);
-
-            SRectangle placing = new SRectangle();
-            placing.SetVariables(dstX, dstY, _rect.Width, _rect.Height);
-
-            if (!placing.IsTouching(dstBounds))
-            {
-                return;
-            }
-
-            placing.CutInside(dstBounds);
-
-            if (placing.Width <= 0 || placing.Height <= 0)
-            {
-                return;
-            }
-
-            int copyWidth = placing.Width;
-            int copyHeight = placing.Height;
-
-            int srcX = placing.X - dstX;
-            int srcY = placing.Y - dstY;
-
-            int dstStartX = placing.X;
-            int dstStartY = placing.Y;
-
-            if (destination._bpp == 0x20)
-            {
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
-                uint[] table = pal.GetTrueColorTablePtr();
-                if (table == null)
-                {
-                    return;
-                }
-
-                ColorKeyRemap8To32Block(srcBuf, srcBase, srcPitch, srcX, srcY,
-                                        dstBuf, dstBase, dstPitch, dstStartX, dstStartY,
-                                        copyWidth, copyHeight, colorKey, remap, table);
-                return;
-            }
-
-            if (destination._bpp == 0x10)
-            {
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
-                ushort[] table = pal.GetHighColorTablePtr();
-                if (table == null)
-                {
-                    return;
-                }
-
-                ColorKeyRemap8To16Block(srcBuf, srcBase, srcPitch, srcX, srcY,
-                                        dstBuf, dstBase, dstPitch, dstStartX, dstStartY,
-                                        copyWidth, copyHeight, colorKey, remap, table);
-                return;
-            }
-
-            if (destination._bpp == 0x08)
-            {
-                ColorKeyRemap8To8Block(srcBuf, srcBase, srcPitch, srcX, srcY,
-                                       dstBuf, dstBase, dstPitch, dstStartX, dstStartY,
-                                       copyWidth, copyHeight, colorKey, remap);
-            }
-        }
-
-        // NXBasics::CBitmap::CopyIntoBitmap_ColorKeyed_RemapTwice(...)
-        internal void CopyIntoBitmap_ColorKeyed_RemapTwice(CBitmap destination, int dstX, int dstY, byte colorKey, byte[] remapA, byte[] remapB)
-        {
-            if (destination == null)
-            {
-                return;
-            }
-
-            if (remapA == null || remapA.Length < 256)
-            {
-                return;
-            }
-
-            if (remapB == null || remapB.Length < 256)
-            {
-                return;
-            }
-
-            if (_bpp != 0x08)
-            {
-                return;
-            }
-
-            if (!TryGetPixelBuffer(out byte[] srcBuf, out int srcBase, out int srcPitch, out int srcBytesPerPixel))
-            {
-                return;
-            }
-
-            if (!destination.TryGetPixelBuffer(out byte[] dstBuf, out int dstBase, out int dstPitch, out int dstBytesPerPixel))
-            {
-                return;
-            }
-
-            SRectangle dstBounds = new SRectangle();
-            dstBounds.SetVariables(0, 0, destination._rect.Width, destination._rect.Height);
-
-            SRectangle placing = new SRectangle();
-            placing.SetVariables(dstX, dstY, _rect.Width, _rect.Height);
-
-            if (!placing.IsTouching(dstBounds))
-            {
-                return;
-            }
-
-            placing.CutInside(dstBounds);
-
-            if (placing.Width <= 0 || placing.Height <= 0)
-            {
-                return;
-            }
-
-            int copyWidth = placing.Width;
-            int copyHeight = placing.Height;
-
-            int srcX = placing.X - dstX;
-            int srcY = placing.Y - dstY;
-
-            int dstStartX = placing.X;
-            int dstStartY = placing.Y;
-
-            if (destination._bpp == 0x20)
-            {
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
-                uint[] table = pal.GetTrueColorTablePtr();
-                if (table == null)
-                {
-                    return;
-                }
-
-                ColorKeyRemapTwice8To32Block(srcBuf, srcBase, srcPitch, srcX, srcY,
-                                             dstBuf, dstBase, dstPitch, dstStartX, dstStartY,
-                                             copyWidth, copyHeight, colorKey, remapA, remapB, table);
-                return;
-            }
-
-            if (destination._bpp == 0x10)
-            {
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
-                ushort[] table = pal.GetHighColorTablePtr();
-                if (table == null)
-                {
-                    return;
-                }
-
-                ColorKeyRemapTwice8To16Block(srcBuf, srcBase, srcPitch, srcX, srcY,
-                                             dstBuf, dstBase, dstPitch, dstStartX, dstStartY,
-                                             copyWidth, copyHeight, colorKey, remapA, remapB, table);
-                return;
-            }
-
-            if (destination._bpp == 0x08)
-            {
-                ColorKeyRemapTwice8To8Block(srcBuf, srcBase, srcPitch, srcX, srcY,
-                                            dstBuf, dstBase, dstPitch, dstStartX, dstStartY,
-                                            copyWidth, copyHeight, colorKey, remapA, remapB);
-            }
-        }
-
-        private static void ColorKeyRemap8To8Block(byte[] src, int srcBase, int srcPitch, int srcX, int srcY,
-                                           byte[] dst, int dstBase, int dstPitch, int dstX, int dstY,
-                                           int width, int height, byte colorKey, byte[] remap)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                int srcRow = checked(srcBase + (srcY + y) * srcPitch + srcX);
-                int dstRow = checked(dstBase + (dstY + y) * dstPitch + dstX);
-
-                for (int x = 0; x < width; x++)
-                {
-                    byte idx = src[srcRow + x];
-                    if (idx != colorKey)
-                    {
-                        dst[dstRow + x] = remap[idx];
-                    }
-                }
-            }
-        }
-
-        private static void ColorKeyRemap8To16Block(byte[] src, int srcBase, int srcPitch, int srcX, int srcY,
-                                                    byte[] dst, int dstBase, int dstPitch, int dstX, int dstY,
-                                                    int width, int height, byte colorKey, byte[] remap, ushort[] table)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                int srcRow = checked(srcBase + (srcY + y) * srcPitch + srcX);
-                int dstRow = checked(dstBase + checked(((dstY + y) * dstPitch + dstX) * 2));
-
-                for (int x = 0; x < width; x++)
-                {
-                    byte idx = src[srcRow + x];
-                    if (idx == colorKey)
-                    {
-                        continue;
-                    }
-
-                    byte mapped = remap[idx];
-                    ushort v = table[mapped];
-
-                    int di = dstRow + x * 2;
-                    dst[di + 0] = (byte)(v & 0xFF);
-                    dst[di + 1] = (byte)((v >> 8) & 0xFF);
-                }
-            }
-        }
-
-        private static void ColorKeyRemap8To32Block(byte[] src, int srcBase, int srcPitch, int srcX, int srcY,
-                                                    byte[] dst, int dstBase, int dstPitch, int dstX, int dstY,
-                                                    int width, int height, byte colorKey, byte[] remap, uint[] table)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                int srcRow = checked(srcBase + (srcY + y) * srcPitch + srcX);
-                int dstRow = checked(dstBase + checked(((dstY + y) * dstPitch + dstX) * 4));
-
-                for (int x = 0; x < width; x++)
-                {
-                    byte idx = src[srcRow + x];
-                    if (idx == colorKey)
-                    {
-                        continue;
-                    }
-
-                    byte mapped = remap[idx];
-                    uint v = table[mapped];
-
-                    int di = dstRow + x * 4;
-                    dst[di + 0] = (byte)(v & 0xFF);
-                    dst[di + 1] = (byte)((v >> 8) & 0xFF);
-                    dst[di + 2] = (byte)((v >> 16) & 0xFF);
-                    dst[di + 3] = (byte)((v >> 24) & 0xFF);
-                }
-            }
-        }
-
-        private static void ColorKeyRemapTwice8To8Block(byte[] src, int srcBase, int srcPitch, int srcX, int srcY,
-                                                        byte[] dst, int dstBase, int dstPitch, int dstX, int dstY,
-                                                        int width, int height, byte colorKey, byte[] remapA, byte[] remapB)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                int srcRow = checked(srcBase + (srcY + y) * srcPitch + srcX);
-                int dstRow = checked(dstBase + (dstY + y) * dstPitch + dstX);
-
-                for (int x = 0; x < width; x++)
-                {
-                    byte idx = src[srcRow + x];
-                    if (idx != colorKey)
-                    {
-                        byte a = remapA[idx];
-                        byte b = remapB[a];
-                        dst[dstRow + x] = b;
-                    }
-                }
-            }
-        }
-
-        private static void ColorKeyRemapTwice8To16Block(byte[] src, int srcBase, int srcPitch, int srcX, int srcY,
-                                                         byte[] dst, int dstBase, int dstPitch, int dstX, int dstY,
-                                                         int width, int height, byte colorKey, byte[] remapA, byte[] remapB, ushort[] table)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                int srcRow = checked(srcBase + (srcY + y) * srcPitch + srcX);
-                int dstRow = checked(dstBase + checked(((dstY + y) * dstPitch + dstX) * 2));
-
-                for (int x = 0; x < width; x++)
-                {
-                    byte idx = src[srcRow + x];
-                    if (idx == colorKey)
-                    {
-                        continue;
-                    }
-
-                    byte mapped = remapB[remapA[idx]];
-                    ushort v = table[mapped];
-
-                    int di = dstRow + x * 2;
-                    dst[di + 0] = (byte)(v & 0xFF);
-                    dst[di + 1] = (byte)((v >> 8) & 0xFF);
-                }
-            }
-        }
-
-        private static void ColorKeyRemapTwice8To32Block(byte[] src, int srcBase, int srcPitch, int srcX, int srcY,
-                                                         byte[] dst, int dstBase, int dstPitch, int dstX, int dstY,
-                                                         int width, int height, byte colorKey, byte[] remapA, byte[] remapB, uint[] table)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                int srcRow = checked(srcBase + (srcY + y) * srcPitch + srcX);
-                int dstRow = checked(dstBase + checked(((dstY + y) * dstPitch + dstX) * 4));
-
-                for (int x = 0; x < width; x++)
-                {
-                    byte idx = src[srcRow + x];
-                    if (idx == colorKey)
-                    {
-                        continue;
-                    }
-
-                    byte mapped = remapB[remapA[idx]];
-                    uint v = table[mapped];
-
-                    int di = dstRow + x * 4;
-                    dst[di + 0] = (byte)(v & 0xFF);
-                    dst[di + 1] = (byte)((v >> 8) & 0xFF);
-                    dst[di + 2] = (byte)((v >> 16) & 0xFF);
-                    dst[di + 3] = (byte)((v >> 24) & 0xFF);
-                }
-            }
+            return index;
         }
 
         // NXBasics::CBitmap::CopyIntoBitmap_HalfSize(...)
@@ -1896,199 +1477,108 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            if (!TryGetPixelBuffer(out byte[] srcBuf, out int srcBase, out int srcPitch, out int srcBytesPerPixel))
+            if (!TryGetPixelBuffer(out byte[]? srcBuf, out int srcBase, out int srcPitchPixels, out int srcBytesPerPixel))
             {
                 return;
             }
 
-            if (!destination.TryGetPixelBuffer(out byte[] dstBuf, out int dstBase, out int dstPitch, out int dstBytesPerPixel))
+            if (!destination.TryGetPixelBuffer(out byte[]? dstBuf, out int dstBase, out int dstPitchPixels, out int dstBytesPerPixel))
             {
                 return;
             }
 
-            // Needs identical byte size per pixel for raw copy.
+            if (srcBuf == null || dstBuf == null)
+            {
+                return;
+            }
+
             if (srcBytesPerPixel != dstBytesPerPixel)
             {
                 return;
             }
 
-            uint srcXSkip = 0;
-
-            SRectangle dstBounds = new SRectangle();
+            SRectangle dstBounds = new();
             dstBounds.SetVariables(0, 0, destination._rect.Width, destination._rect.Height);
 
-            SRectangle placing = new SRectangle();
+            SRectangle placing = new();
             placing.SetVariables(dstX, dstY, _rect.Width / 2, _rect.Height / 2);
 
-            int startX = placing.X;
-            int startY = placing.Y;
-
-            int ySkip = 0;
-
-            if (placing.Y < 0)
-            {
-                ySkip = -placing.Y;
-                placing.Y = 0;
-            }
-
-            if (placing.X < 0)
-            {
-                srcXSkip = (uint)(-placing.X);
-                placing.X = 0;
-            }
-
-            // Original uses IsInside(placing, dstBounds)
-            if (!placing.IsInside(dstBounds))
+            if (!placing.IsTouching(dstBounds))
             {
                 return;
             }
 
-            if (ySkip >= placing.Height || placing.Height <= 0 || placing.Width <= 0)
+            SRectangle clipped = placing;
+            clipped.CutInside(dstBounds);
+
+            if (clipped.Width <= 0 || clipped.Height <= 0)
             {
                 return;
             }
 
-            // xStart mirrors: int xStart=0; if (0 < startX) xStart = startX;
-            int xStart = 0;
-            if (0 < startX)
-            {
-                xStart = startX;
-            }
+            // How much of the intended placement was clipped away on the left/top
+            int clippedLeft = clipped.X - placing.X;
+            int clippedTop = clipped.Y - placing.Y;
 
-            if (_bpp == 0x20)
+            // Source skip is *twice* that because of half-size sampling.
+            int srcXSkip = checked(clippedLeft * 2);
+            int srcYSkip = checked(clippedTop * 2);
+
+            int bytesPerPixel = srcBytesPerPixel;
+
+            if (_bpp == 0x20 && bytesPerPixel == 4)
             {
-                CopyHalf_32(srcBuf, srcBase, srcPitch, (int)srcXSkip, ySkip,
-                            dstBuf, dstBase, dstPitch, placing.X, placing.Y,
-                            placing.Width, placing.Height, xStart, startX);
+                CopyHalf_Generic(srcBuf, srcBase, srcPitchPixels, srcXSkip, srcYSkip, dstBuf, dstBase, dstPitchPixels, clipped.X, clipped.Y, clipped.Width, clipped.Height, 4);
                 return;
             }
 
-            if (_bpp == 0x10)
+            if (_bpp == 0x10 && bytesPerPixel == 2)
             {
-                CopyHalf_16(srcBuf, srcBase, srcPitch, (int)srcXSkip, ySkip,
-                            dstBuf, dstBase, dstPitch, placing.X, placing.Y,
-                            placing.Width, placing.Height, xStart, startX);
+                CopyHalf_Generic(srcBuf, srcBase, srcPitchPixels, srcXSkip, srcYSkip, dstBuf, dstBase, dstPitchPixels, clipped.X, clipped.Y, clipped.Width, clipped.Height, 2);
                 return;
             }
 
-            if (_bpp == 0x08)
+            if (_bpp == 0x08 && bytesPerPixel == 1)
             {
-                CopyHalf_8(srcBuf, srcBase, srcPitch, (int)srcXSkip, ySkip,
-                           dstBuf, dstBase, dstPitch, placing.X, placing.Y,
-                           placing.Width, placing.Height, xStart, startX);
+                CopyHalf_Generic(srcBuf, srcBase, srcPitchPixels, srcXSkip, srcYSkip, dstBuf, dstBase, dstPitchPixels, clipped.X, clipped.Y, clipped.Width, clipped.Height, 1);
             }
         }
 
-        private static void CopyHalf_32(byte[] src, int srcBase, int srcPitchPixels, int srcXSkip, int ySkip,
-                                byte[] dst, int dstBase, int dstPitchPixels, int dstX, int dstY,
-                                int width, int height, int xStart, int startX)
+        private static void CopyHalf_Generic(byte[] src, int srcBase, int srcPitchPixels, int srcXSkip, int srcYSkip, byte[] dst, int dstBase, int dstPitchPixels, int dstX, int dstY, int width, int height, int bytesPerPixel)
         {
-            // srcPtr in dump: ((srcPitch*ySkip + srcXSkip) * 2) * 4 bytes
-            int srcRow = checked(srcBase + checked(((srcPitchPixels * ySkip + srcXSkip) * 2) * 4));
+            int srcStrideBytes = checked(srcPitchPixels * bytesPerPixel);
+            int dstStrideBytes = checked(dstPitchPixels * bytesPerPixel);
 
-            // dstPtr in dump: ((placingY*dstPitch + placingX) * 4 bytes)
-            int dstRow = checked(dstBase + checked(((dstY * dstPitchPixels) + dstX) * 4));
-
-            int row = ySkip;
-            while (row < height)
+            for (int y = 0; y < height; y++)
             {
-                uint x = (uint)srcXSkip;
+                int sy = checked(srcYSkip + (y * 2));
+                int srcRow = checked(srcBase + sy * srcStrideBytes);
 
-                // srcCol = (xStart * 2) + (startX * -2)  == 2*(xStart - startX)
-                int srcColPixels = (xStart * 2) - (startX * 2);
+                int dstRow = checked(dstBase + (dstY + y) * dstStrideBytes + dstX * bytesPerPixel);
 
-                if (srcXSkip < width)
+                for (int x = 0; x < width; x++)
                 {
-                    while (x < (uint)width)
-                    {
-                        int si = checked(srcRow + checked((srcColPixels * 4)));
-                        int di = checked(dstRow + checked(((int)x) * 4));
+                    int sx = checked(srcXSkip + (x * 2));
+                    int si = checked(srcRow + sx * bytesPerPixel);
+                    int di = checked(dstRow + x * bytesPerPixel);
 
+                    if (bytesPerPixel == 1)
+                    {
+                        dst[di] = src[si];
+                    }
+                    else if (bytesPerPixel == 2)
+                    {
+                        dst[di + 0] = src[si + 0];
+                        dst[di + 1] = src[si + 1];
+                    }
+                    else
+                    {
                         dst[di + 0] = src[si + 0];
                         dst[di + 1] = src[si + 1];
                         dst[di + 2] = src[si + 2];
                         dst[di + 3] = src[si + 3];
-
-                        x++;
-                        srcColPixels += 2;
                     }
                 }
-
-                // srcPtr += (srcPitch*2) * 4 bytes
-                srcRow = checked(srcRow + checked((srcPitchPixels * 2) * 4));
-                // dstPtr += dstPitch * 4 bytes
-                dstRow = checked(dstRow + checked(dstPitchPixels * 4));
-
-                row++;
-            }
-        }
-
-        private static void CopyHalf_16(byte[] src, int srcBase, int srcPitchPixels, int srcXSkip, int ySkip,
-                                        byte[] dst, int dstBase, int dstPitchPixels, int dstX, int dstY,
-                                        int width, int height, int xStart, int startX)
-        {
-            int srcRow = checked(srcBase + checked(((srcPitchPixels * ySkip + srcXSkip) * 2) * 2));
-            int dstRow = checked(dstBase + checked(((dstY * dstPitchPixels) + dstX) * 2));
-
-            int row = ySkip;
-            while (row < height)
-            {
-                int x = srcXSkip;
-                int srcColPixels = (xStart * 2) - (startX * 2);
-
-                if (srcXSkip < width)
-                {
-                    while (x < width)
-                    {
-                        int si = checked(srcRow + checked(srcColPixels * 2));
-                        int di = checked(dstRow + checked(x * 2));
-
-                        dst[di + 0] = src[si + 0];
-                        dst[di + 1] = src[si + 1];
-
-                        x++;
-                        srcColPixels += 2;
-                    }
-                }
-
-                srcRow = checked(srcRow + checked((srcPitchPixels * 2) * 2));
-                dstRow = checked(dstRow + checked(dstPitchPixels * 2));
-
-                row++;
-            }
-        }
-
-        private static void CopyHalf_8(byte[] src, int srcBase, int srcPitchPixels, int srcXSkip, int ySkip,
-                                       byte[] dst, int dstBase, int dstPitchPixels, int dstX, int dstY,
-                                       int width, int height, int xStart, int startX)
-        {
-            int srcRow = checked(srcBase + checked((srcPitchPixels * ySkip + srcXSkip) * 2));
-            int dstRow = checked(dstBase + checked((dstY * dstPitchPixels) + dstX));
-
-            int row = ySkip;
-            while (row < height)
-            {
-                uint x = (uint)srcXSkip;
-                int srcColPixels = (xStart * 2) - (startX * 2);
-
-                if (srcXSkip < width)
-                {
-                    while (x < (uint)width)
-                    {
-                        int si = checked(srcRow + srcColPixels);
-                        int di = checked(dstRow + (int)x);
-
-                        dst[di] = src[si];
-
-                        x++;
-                        srcColPixels += 2;
-                    }
-                }
-
-                srcRow = checked(srcRow + (srcPitchPixels * 2));
-                dstRow = checked(dstRow + dstPitchPixels);
-
-                row++;
             }
         }
 
@@ -2105,27 +1595,32 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            if (!TryGetPixelBuffer(out byte[] srcBuf, out int srcBase, out int srcPitch, out int srcBytesPerPixel))
+            if (!TryGetPixelBuffer(out byte[]? srcBuf, out int srcBase, out int srcPitchPixels, out int srcBytesPerPixel))
             {
                 return;
             }
 
-            if (srcBytesPerPixel != 1)
+            if (srcBuf == null || srcBytesPerPixel != 1)
             {
                 return;
             }
 
-            if (!destination.TryGetPixelBuffer(out byte[] dstBuf, out int dstBase, out int dstPitch, out int dstBytesPerPixel))
+            if (!destination.TryGetPixelBuffer(out byte[]? dstBuf, out int dstBase, out int dstPitchPixels, out int dstBytesPerPixel))
+            {
+                return;
+            }
+
+            if (dstBuf == null)
             {
                 return;
             }
 
             uint srcXSkip = 0;
 
-            SRectangle dstBounds = new SRectangle();
+            SRectangle dstBounds = new();
             dstBounds.SetVariables(0, 0, destination._rect.Width, destination._rect.Height);
 
-            SRectangle placing = new SRectangle();
+            SRectangle placing = new();
             placing.SetVariables(dstX, dstY, _rect.Width / 2, _rect.Height / 2);
 
             int startX = placing.X;
@@ -2159,8 +1654,7 @@ namespace OpenVikings.NXBasics
                 xStart = startX;
             }
 
-            // srcPtr in dump: _ptr8 + ((srcPitch * ySkip + srcXSkip) * 2)
-            int srcRow = checked(srcBase + checked((srcPitch * ySkip + (int)srcXSkip) * 2));
+            int srcRow = checked(srcBase + checked((srcPitchPixels * ySkip + (int)srcXSkip) * 2));
 
             if (destination._bpp == 0x20)
             {
@@ -2169,51 +1663,40 @@ namespace OpenVikings.NXBasics
                     return;
                 }
 
-                CPalette palette = _palette;
-                palette ??= CXBSystemManager.sPalettePtr;
-
-                uint[] table = palette.GetTrueColorTablePtr();
-                if (table == null)
+                CPalette palette = _palette ?? CXBSystemManager.sPalettePtr;
+                uint[] table32 = palette.GetTrueColorTablePtr();
+                if (table32 == null)
                 {
                     return;
                 }
 
-                int dstRow = checked(dstBase + checked(((placing.Y * dstPitch) + placing.X) * 4));
+                int dstRow = checked(dstBase + checked(((placing.Y * dstPitchPixels) + placing.X) * 4));
 
                 int row = ySkip;
                 while (row < placing.Height)
                 {
-                    ulong x = srcXSkip;
                     int srcCol = (xStart * 2) - (startX * 2);
+                    int dx = (int)srcXSkip;
 
-                    if ((int)srcXSkip < placing.Width)
+                    while (dx < placing.Width)
                     {
-                        while ((int)x < placing.Width)
+                        byte idx = srcBuf[checked(srcRow + srcCol)];
+                        if (idx != colorKey)
                         {
-                            int si = checked(srcRow + srcCol);
-                            byte idx = srcBuf[si];
-
-                            if (idx != colorKey)
-                            {
-                                uint color = table[idx];
-
-                                int di = checked(dstRow + checked(((int)x) * 4));
-                                dstBuf[di + 0] = (byte)(color & 0xFF);
-                                dstBuf[di + 1] = (byte)((color >> 8) & 0xFF);
-                                dstBuf[di + 2] = (byte)((color >> 16) & 0xFF);
-                                dstBuf[di + 3] = (byte)((color >> 24) & 0xFF);
-                            }
-
-                            x++;
-                            srcCol += 2;
+                            uint color = table32[idx];
+                            int di = checked(dstRow + checked(dx * 4));
+                            dstBuf[di + 0] = (byte)(color & 0xFF);
+                            dstBuf[di + 1] = (byte)((color >> 8) & 0xFF);
+                            dstBuf[di + 2] = (byte)((color >> 16) & 0xFF);
+                            dstBuf[di + 3] = (byte)((color >> 24) & 0xFF);
                         }
+
+                        dx++;
+                        srcCol += 2;
                     }
 
-                    // srcPtr += srcPitch * 2
-                    srcRow = checked(srcRow + (srcPitch * 2));
-                    // dstPtr += dstPitch * 4
-                    dstRow = checked(dstRow + checked(dstPitch * 4));
-
+                    srcRow = checked(srcRow + (srcPitchPixels * 2));
+                    dstRow = checked(dstRow + checked(dstPitchPixels * 4));
                     row++;
                 }
 
@@ -2227,47 +1710,38 @@ namespace OpenVikings.NXBasics
                     return;
                 }
 
-                CPalette palette = _palette;
-                palette ??= CXBSystemManager.sPalettePtr;
-
-                ushort[] table = palette.GetHighColorTablePtr();
-                if (table == null)
+                CPalette palette = _palette ?? CXBSystemManager.sPalettePtr;
+                ushort[] table16 = palette.GetHighColorTablePtr();
+                if (table16 == null)
                 {
                     return;
                 }
 
-                int dstRow = checked(dstBase + checked(((placing.Y * dstPitch) + placing.X) * 2));
+                int dstRow = checked(dstBase + checked(((placing.Y * dstPitchPixels) + placing.X) * 2));
 
                 int row = ySkip;
                 while (row < placing.Height)
                 {
-                    ulong x = srcXSkip;
                     int srcCol = (xStart * 2) - (startX * 2);
+                    int dx = (int)srcXSkip;
 
-                    if ((int)srcXSkip < placing.Width)
+                    while (dx < placing.Width)
                     {
-                        while ((int)x < placing.Width)
+                        byte idx = srcBuf[checked(srcRow + srcCol)];
+                        if (idx != colorKey)
                         {
-                            int si = checked(srcRow + srcCol);
-                            byte idx = srcBuf[si];
-
-                            if (idx != colorKey)
-                            {
-                                ushort w = table[idx];
-
-                                int di = checked(dstRow + checked(((int)x) * 2));
-                                dstBuf[di + 0] = (byte)(w & 0xFF);
-                                dstBuf[di + 1] = (byte)((w >> 8) & 0xFF);
-                            }
-
-                            x++;
-                            srcCol += 2;
+                            ushort w = table16[idx];
+                            int di = checked(dstRow + checked(dx * 2));
+                            dstBuf[di + 0] = (byte)(w & 0xFF);
+                            dstBuf[di + 1] = (byte)((w >> 8) & 0xFF);
                         }
+
+                        dx++;
+                        srcCol += 2;
                     }
 
-                    srcRow = checked(srcRow + (srcPitch * 2));
-                    dstRow = checked(dstRow + checked(dstPitch * 2));
-
+                    srcRow = checked(srcRow + (srcPitchPixels * 2));
+                    dstRow = checked(dstRow + checked(dstPitchPixels * 2));
                     row++;
                 }
 
@@ -2281,42 +1755,34 @@ namespace OpenVikings.NXBasics
                     return;
                 }
 
-                int dstRow = checked(dstBase + (placing.Y * dstPitch) + placing.X);
+                int dstRow = checked(dstBase + (placing.Y * dstPitchPixels) + placing.X);
 
                 int row = ySkip;
                 while (row < placing.Height)
                 {
-                    uint x = srcXSkip;
                     int srcCol = (xStart * 2) - (startX * 2);
+                    int dx = (int)srcXSkip;
 
-                    if ((int)srcXSkip < placing.Width)
+                    while (dx < placing.Width)
                     {
-                        while ((int)x < placing.Width)
+                        byte idx = srcBuf[checked(srcRow + srcCol)];
+                        if (idx != colorKey)
                         {
-                            int si = checked(srcRow + srcCol);
-                            byte idx = srcBuf[si];
-
-                            if (idx != colorKey)
-                            {
-                                int di = checked(dstRow + (int)x);
-                                dstBuf[di] = idx;
-                            }
-
-                            x++;
-                            srcCol += 2;
+                            dstBuf[checked(dstRow + dx)] = idx;
                         }
+
+                        dx++;
+                        srcCol += 2;
                     }
 
-                    srcRow = checked(srcRow + (srcPitch * 2));
-                    dstRow = checked(dstRow + dstPitch);
-
+                    srcRow = checked(srcRow + (srcPitchPixels * 2));
+                    dstRow = checked(dstRow + dstPitchPixels);
                     row++;
                 }
             }
         }
 
-        // NXBasics::CBitmap::CopyIntoBitmap_HalfSize_ColorKeyed_Remap(NXBasics::CBitmap const&, int, int, unsigned char, unsigned char const*) const
-        // NXBasics::CBitmap::CopyIntoBitmap_HalfSize_ColorKeyed_RemapTwice(NXBasics::CBitmap const&, int, int, unsigned char, unsigned char const*, unsigned char const*) const
+        // HalfSize remap wrappers
         internal void CopyIntoBitmap_HalfSize_ColorKeyed_Remap(CBitmap destination, int dstX, int dstY, byte colorKey, byte[] remap)
         {
             CopyIntoBitmap_HalfSize_ColorKeyed_RemapCore(destination, dstX, dstY, colorKey, remap, null, false);
@@ -2329,7 +1795,7 @@ namespace OpenVikings.NXBasics
 
         private void CopyIntoBitmap_HalfSize_ColorKeyed_RemapCore(CBitmap destination, int dstX, int dstY, byte colorKey, byte[] remapA, byte[]? remapB, bool longAlign)
         {
-            if (destination is null)
+            if (destination == null)
             {
                 return;
             }
@@ -2339,27 +1805,32 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            if (!TryGetPixelBuffer(out byte[] srcBuf, out int srcBase, out int srcPitch, out int srcBytesPerPixel))
+            if (remapA == null || remapA.Length < 256)
             {
                 return;
             }
 
-            if (srcBytesPerPixel != 1)
+            if (remapB != null && remapB.Length < 256)
             {
                 return;
             }
 
-            if (!destination.TryGetPixelBuffer(out byte[] dstBuf, out int dstBase, out int dstPitch, out int dstBytesPerPixel))
+            if (!TryGetPixelBuffer(out byte[]? srcBuf, out int srcBase, out int srcPitchPixels, out int srcBytesPerPixel))
             {
                 return;
             }
 
-            if (remapA is null || remapA.Length < 256)
+            if (srcBuf == null || srcBytesPerPixel != 1)
             {
                 return;
             }
 
-            if (remapB is not null && remapB.Length < 256)
+            if (!destination.TryGetPixelBuffer(out byte[]? dstBuf, out int dstBase, out int dstPitchPixels, out int dstBytesPerPixel))
+            {
+                return;
+            }
+
+            if (dstBuf == null)
             {
                 return;
             }
@@ -2368,17 +1839,13 @@ namespace OpenVikings.NXBasics
 
             SRectangle dstBounds = new(0, 0, destination._rect.Width, destination._rect.Height);
 
-            int x0 = dstX;
-            int y0 = dstY;
-
             SRectangle placing;
-
             if (longAlign)
             {
-                x0 = dstX & ~1;
-                y0 = dstY & ~1;
+                int ax = dstX & ~1;
+                int ay = dstY & ~1;
 
-                placing = new SRectangle(x0, y0, _rect.Width / 2, _rect.Height / 2);
+                placing = new SRectangle(ax, ay, _rect.Width / 2, _rect.Height / 2);
 
                 dstBounds.MakeSizeLongAlligned();
                 placing.MakeSizeLongAlligned();
@@ -2408,9 +1875,17 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
+            int xStart = 0;
+            if (0 < originalPlacingX)
+            {
+                xStart = originalPlacingX;
+            }
+
+            int srcColStart = (xStart * 2) - (originalPlacingX * 2);
+
             byte Map(byte idx)
             {
-                if (remapB is null)
+                if (remapB == null)
                 {
                     return remapA[idx];
                 }
@@ -2418,154 +1893,115 @@ namespace OpenVikings.NXBasics
                 return remapB[remapA[idx]];
             }
 
-            int xStart = 0;
-            if (0 < originalPlacingX)
+            int srcRow = checked(srcBase + checked((srcPitchPixels * ySkip + (int)srcXSkip) * 2));
+
+            if (dstBytesPerPixel == 4)
             {
-                xStart = originalPlacingX;
-            }
-
-            int srcXBase = (xStart - originalPlacingX) * 2;
-
-            ReadOnlySpan<byte> src = srcBuf;
-            Span<byte> dst = dstBuf;
-
-            // Destination base offset in bytes (top-left of placing rectangle)
-            int dstPlacingBase = dstBase + ((placing.Y * dstPitch) + placing.X) * dstBytesPerPixel;
-
-            if (dstBytesPerPixel == 4) // 0x20
-            {
-                CPalette palette = _palette;
-                palette ??= CXBSystemManager.sPalettePtr;
-
-                ushort[] table = palette.GetHighColorTablePtr();
-                if (table == null)
+                CPalette palette = _palette ?? CXBSystemManager.sPalettePtr;
+                uint[] table32 = palette.GetTrueColorTablePtr();
+                if (table32 == null)
                 {
                     return;
                 }
 
-                for (int row = ySkip; row < placing.Height; row++)
+                int dstRow = checked(dstBase + checked(((placing.Y * dstPitchPixels) + placing.X) * 4));
+
+                int row = ySkip;
+                while (row < placing.Height)
                 {
-                    int srcY = row * 2;
-                    int srcRowByte = srcBase + (srcY * srcPitch) + ((int)srcXSkip * 2);
+                    int srcCol = srcColStart;
+                    int dx = (int)srcXSkip;
 
-                    int dstRowByte = dstPlacingBase + ((row - ySkip) * dstPitch * 4);
-
-                    for (int x = (int)srcXSkip; x < placing.Width; x++)
+                    while (dx < placing.Width)
                     {
-                        int srcIndex = srcRowByte + (srcXBase + (x * 2));
-                        if ((uint)srcIndex >= (uint)src.Length)
+                        byte idx = srcBuf[checked(srcRow + srcCol)];
+                        if (idx != colorKey)
                         {
-                            continue;
+                            uint color = table32[Map(idx)];
+                            int di = checked(dstRow + checked(dx * 4));
+                            dstBuf[di + 0] = (byte)(color & 0xFF);
+                            dstBuf[di + 1] = (byte)((color >> 8) & 0xFF);
+                            dstBuf[di + 2] = (byte)((color >> 16) & 0xFF);
+                            dstBuf[di + 3] = (byte)((color >> 24) & 0xFF);
                         }
 
-                        byte idx = src[srcIndex];
-                        if (idx == colorKey)
-                        {
-                            continue;
-                        }
-
-                        byte mapped = Map(idx);
-                        uint color = table[mapped];
-
-                        int dstIndex = dstRowByte + (x * 4);
-                        if ((uint)(dstIndex + 3) >= (uint)dst.Length)
-                        {
-                            continue;
-                        }
-
-                        // Little-endian write (avoids pointers/unsafe)
-                        dst[dstIndex + 0] = (byte)(color);
-                        dst[dstIndex + 1] = (byte)(color >> 8);
-                        dst[dstIndex + 2] = (byte)(color >> 16);
-                        dst[dstIndex + 3] = (byte)(color >> 24);
+                        dx++;
+                        srcCol += 2;
                     }
+
+                    srcRow = checked(srcRow + (srcPitchPixels * 2));
+                    dstRow = checked(dstRow + checked(dstPitchPixels * 4));
+                    row++;
                 }
 
                 return;
             }
 
-            if (dstBytesPerPixel == 2) // 0x10
+            if (dstBytesPerPixel == 2)
             {
-                CPalette palette = _palette;
-                palette ??= CXBSystemManager.sPalettePtr;
-
-                ushort[] table = palette.GetHighColorTablePtr();
-                if (table == null)
+                CPalette palette = _palette ?? CXBSystemManager.sPalettePtr;
+                ushort[] table16 = palette.GetHighColorTablePtr();
+                if (table16 == null)
                 {
                     return;
                 }
 
-                for (int row = ySkip; row < placing.Height; row++)
+                int dstRow = checked(dstBase + checked(((placing.Y * dstPitchPixels) + placing.X) * 2));
+
+                int row = ySkip;
+                while (row < placing.Height)
                 {
-                    int srcY = row * 2;
-                    int srcRowByte = srcBase + (srcY * srcPitch) + ((int)srcXSkip * 2);
+                    int srcCol = srcColStart;
+                    int dx = (int)srcXSkip;
 
-                    int dstRowByte = dstPlacingBase + ((row - ySkip) * dstPitch * 2);
-
-                    for (int x = (int)srcXSkip; x < placing.Width; x++)
+                    while (dx < placing.Width)
                     {
-                        int srcIndex = srcRowByte + (srcXBase + (x * 2));
-                        if ((uint)srcIndex >= (uint)src.Length)
+                        byte idx = srcBuf[checked(srcRow + srcCol)];
+                        if (idx != colorKey)
                         {
-                            continue;
+                            ushort w = table16[Map(idx)];
+                            int di = checked(dstRow + checked(dx * 2));
+                            dstBuf[di + 0] = (byte)(w & 0xFF);
+                            dstBuf[di + 1] = (byte)((w >> 8) & 0xFF);
                         }
 
-                        byte idx = src[srcIndex];
-                        if (idx == colorKey)
-                        {
-                            continue;
-                        }
-
-                        byte mapped = Map(idx);
-                        ushort w = table[mapped];
-
-                        int dstIndex = dstRowByte + (x * 2);
-                        if ((uint)(dstIndex + 1) >= (uint)dst.Length)
-                        {
-                            continue;
-                        }
-
-                        dst[dstIndex + 0] = (byte)(w);
-                        dst[dstIndex + 1] = (byte)(w >> 8);
+                        dx++;
+                        srcCol += 2;
                     }
+
+                    srcRow = checked(srcRow + (srcPitchPixels * 2));
+                    dstRow = checked(dstRow + checked(dstPitchPixels * 2));
+                    row++;
                 }
 
                 return;
             }
 
-            if (dstBytesPerPixel == 1) // 0x08
+            if (dstBytesPerPixel == 1)
             {
-                for (int row = ySkip; row < placing.Height; row++)
+                int dstRow = checked(dstBase + (placing.Y * dstPitchPixels) + placing.X);
+
+                int row = ySkip;
+                while (row < placing.Height)
                 {
-                    int srcY = row * 2;
-                    int srcRowByte = srcBase + (srcY * srcPitch) + ((int)srcXSkip * 2);
+                    int srcCol = srcColStart;
+                    int dx = (int)srcXSkip;
 
-                    int dstRowByte = dstPlacingBase + ((row - ySkip) * dstPitch);
-
-                    for (int x = (int)srcXSkip; x < placing.Width; x++)
+                    while (dx < placing.Width)
                     {
-                        int srcIndex = srcRowByte + (srcXBase + (x * 2));
-                        if ((uint)srcIndex >= (uint)src.Length)
+                        byte idx = srcBuf[checked(srcRow + srcCol)];
+                        if (idx != colorKey)
                         {
-                            continue;
+                            dstBuf[checked(dstRow + dx)] = Map(idx);
                         }
 
-                        byte idx = src[srcIndex];
-                        if (idx == colorKey)
-                        {
-                            continue;
-                        }
-
-                        byte mapped = Map(idx);
-
-                        int dstIndex = dstRowByte + x;
-                        if ((uint)dstIndex >= (uint)dst.Length)
-                        {
-                            continue;
-                        }
-
-                        dst[dstIndex] = mapped;
+                        dx++;
+                        srcCol += 2;
                     }
+
+                    srcRow = checked(srcRow + (srcPitchPixels * 2));
+                    dstRow = checked(dstRow + dstPitchPixels);
+                    row++;
                 }
             }
         }
@@ -2584,20 +2020,12 @@ namespace OpenVikings.NXBasics
             int dstW = destination._rect.Width;
             int dstH = destination._rect.Height;
 
-            // src must be exactly 2x dst
-            if (srcW != dstW * 2)
+            if (srcW != dstW * 2 || srcH != dstH * 2)
             {
                 CopyIntoBitmap_HalfSize(destination, 0, 0);
                 return;
             }
 
-            if (srcH != dstH * 2)
-            {
-                CopyIntoBitmap_HalfSize(destination, 0, 0);
-                return;
-            }
-
-            // must match bpp and only 16 or 32 supported by optimized path
             if (_bpp != destination._bpp)
             {
                 CopyIntoBitmap_HalfSize(destination, 0, 0);
@@ -2610,20 +2038,26 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            // native requires even height and src width aligned (srcW & 0x3f) == 0
+            // Matches original constraints.
             if (((srcH & 1) != 0) || ((srcW & 0x3F) != 0))
             {
                 CopyIntoBitmap_HalfSize(destination, 0, 0);
                 return;
             }
 
-            if (!TryGetPixelBuffer(out byte[] srcBuf, out int srcBase, out int srcPitch, out int srcBytesPerPixel))
+            if (!TryGetPixelBuffer(out byte[]? srcBuf, out int srcBase, out int srcPitchPixels, out int srcBytesPerPixel))
             {
                 CopyIntoBitmap_HalfSize(destination, 0, 0);
                 return;
             }
 
-            if (!destination.TryGetPixelBuffer(out byte[] dstBuf, out int dstBase, out int dstPitch, out int dstBytesPerPixel))
+            if (!destination.TryGetPixelBuffer(out byte[]? dstBuf, out int dstBase, out int dstPitchPixels, out int dstBytesPerPixel))
+            {
+                CopyIntoBitmap_HalfSize(destination, 0, 0);
+                return;
+            }
+
+            if (srcBuf == null || dstBuf == null)
             {
                 CopyIntoBitmap_HalfSize(destination, 0, 0);
                 return;
@@ -2642,11 +2076,9 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            int srcRowStrideBytes = checked(srcPitch * bytesPerPixel);
-            int dstRowStrideBytes = checked(dstPitch * bytesPerPixel);
+            int srcRowStrideBytes = checked(srcPitchPixels * bytesPerPixel);
+            int dstRowStrideBytes = checked(dstPitchPixels * bytesPerPixel);
 
-            // Nearest-neighbor half-size:
-            // dst(x,y) = src(2x,2y)
             for (int y = 0; y < dstH; y++)
             {
                 int srcRow = checked(srcBase + (2 * y) * srcRowStrideBytes);
@@ -2681,12 +2113,17 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            if (!TryGetPixelBuffer(out byte[] srcBuf, out int srcBase, out int srcPitch, out int srcBytesPerPixel))
+            if (!TryGetPixelBuffer(out byte[]? srcBuf, out int srcBase, out int srcPitchPixels, out int srcBytesPerPixel))
             {
                 return;
             }
 
-            if (!destination.TryGetPixelBuffer(out byte[] dstBuf, out int dstBase, out int dstPitch, out int dstBytesPerPixel))
+            if (!destination.TryGetPixelBuffer(out byte[]? dstBuf, out int dstBase, out int dstPitchPixels, out int dstBytesPerPixel))
+            {
+                return;
+            }
+
+            if (srcBuf == null || dstBuf == null)
             {
                 return;
             }
@@ -2709,28 +2146,22 @@ namespace OpenVikings.NXBasics
 
             if (_bpp == 0x20)
             {
-                if (destination._bpp != 0x20)
+                if (destination._bpp != 0x20 || srcBytesPerPixel != 4 || dstBytesPerPixel != 4)
                 {
                     return;
                 }
 
-                if (srcBytesPerPixel != 4 || dstBytesPerPixel != 4)
-                {
-                    return;
-                }
-
-                int srcRowStrideBytes = checked(srcPitch * 4);
-                int dstRowStrideBytes = checked(dstPitch * 4);
+                int srcRowStrideBytes = checked(srcPitchPixels * 4);
+                int dstRowStrideBytes = checked(dstPitchPixels * 4);
 
                 for (int y = 0; y < dstH; y++)
                 {
-                    int srcY = (srcH * y) / dstH;
+                    int sy = (srcH * y) / dstH;
 
                     for (int x = 0; x < dstW; x++)
                     {
-                        int srcX = (srcW * x) / dstW;
-
-                        uint pixel = ReadPixel32(srcBuf, srcBase, srcRowStrideBytes, srcX, srcY);
+                        int sx = (srcW * x) / dstW;
+                        uint pixel = ReadPixel32(srcBuf, srcBase, srcRowStrideBytes, sx, sy);
                         WritePixel32(dstBuf, dstBase, dstRowStrideBytes, x, y, pixel);
                     }
                 }
@@ -2740,29 +2171,22 @@ namespace OpenVikings.NXBasics
 
             if (_bpp == 0x10)
             {
-                if (destination._bpp != 0x10)
+                if (destination._bpp != 0x10 || srcBytesPerPixel != 2 || dstBytesPerPixel != 2)
                 {
                     return;
                 }
 
-                if (srcBytesPerPixel != 2 || dstBytesPerPixel != 2)
-                {
-                    return;
-                }
+                int srcRowStrideBytes = checked(srcPitchPixels * 2);
+                int dstRowStrideBytes = checked(dstPitchPixels * 2);
 
-                int srcRowStrideBytes = checked(srcPitch * 2);
-                int dstRowStrideBytes = checked(dstPitch * 2);
-
-                // Original had an accumulator for srcX, but it is equivalent to (srcW * x) / dstW.
                 for (int y = 0; y < dstH; y++)
                 {
-                    int srcY = (srcH * y) / dstH;
+                    int sy = (srcH * y) / dstH;
 
                     for (int x = 0; x < dstW; x++)
                     {
-                        int srcX = (srcW * x) / dstW;
-
-                        ushort pixel = ReadPixel16(srcBuf, srcBase, srcRowStrideBytes, srcX, srcY);
+                        int sx = (srcW * x) / dstW;
+                        ushort pixel = ReadPixel16(srcBuf, srcBase, srcRowStrideBytes, sx, sy);
                         WritePixel16(dstBuf, dstBase, dstRowStrideBytes, x, y, pixel);
                     }
                 }
@@ -2770,12 +2194,11 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            if (_bpp != 0x08)
+            if (_bpp != 0x08 || srcBytesPerPixel != 1)
             {
                 return;
             }
 
-            // 8-bit source => destination may be 32/16/8
             if (destination._bpp == 0x20)
             {
                 if (dstBytesPerPixel != 4)
@@ -2783,25 +2206,25 @@ namespace OpenVikings.NXBasics
                     return;
                 }
 
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
-                uint[] table = pal.GetTrueColorTablePtr();
-                if (table == null)
+                CPalette palette = _palette ?? CXBSystemManager.sPalettePtr;
+                uint[] table32 = palette.GetTrueColorTablePtr();
+                if (table32 == null)
                 {
                     return;
                 }
 
-                int srcRowStrideBytes = srcPitch;          // 1 byte per pixel
-                int dstRowStrideBytes = checked(dstPitch * 4);
+                int srcRowStrideBytes = srcPitchPixels;
+                int dstRowStrideBytes = checked(dstPitchPixels * 4);
 
                 for (int y = 0; y < dstH; y++)
                 {
-                    int srcY = (srcH * y) / dstH;
-                    int srcRow = checked(srcBase + srcY * srcRowStrideBytes);
+                    int sy = (srcH * y) / dstH;
+                    int srcRow = checked(srcBase + sy * srcRowStrideBytes);
 
                     for (int x = 0; x < dstW; x++)
                     {
-                        int srcX = (srcW * x) / dstW;
-                        int si = srcRow + srcX;
+                        int sx = (srcW * x) / dstW;
+                        int si = srcRow + sx;
 
                         if ((uint)si >= (uint)srcBuf.Length)
                         {
@@ -2809,8 +2232,7 @@ namespace OpenVikings.NXBasics
                             continue;
                         }
 
-                        byte idx = srcBuf[si];
-                        uint color = table[idx];
+                        uint color = table32[srcBuf[si]];
                         WritePixel32(dstBuf, dstBase, dstRowStrideBytes, x, y, color);
                     }
                 }
@@ -2825,25 +2247,25 @@ namespace OpenVikings.NXBasics
                     return;
                 }
 
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
-                ushort[] table = pal.GetHighColorTablePtr();
-                if (table == null)
+                CPalette palette = _palette ?? CXBSystemManager.sPalettePtr;
+                ushort[] table16 = palette.GetHighColorTablePtr();
+                if (table16 == null)
                 {
                     return;
                 }
 
-                int srcRowStrideBytes = srcPitch;          // 1 byte per pixel
-                int dstRowStrideBytes = checked(dstPitch * 2);
+                int srcRowStrideBytes = srcPitchPixels;
+                int dstRowStrideBytes = checked(dstPitchPixels * 2);
 
                 for (int y = 0; y < dstH; y++)
                 {
-                    int srcY = (srcH * y) / dstH;
-                    int srcRow = checked(srcBase + srcY * srcRowStrideBytes);
+                    int sy = (srcH * y) / dstH;
+                    int srcRow = checked(srcBase + sy * srcRowStrideBytes);
 
                     for (int x = 0; x < dstW; x++)
                     {
-                        int srcX = (srcW * x) / dstW;
-                        int si = srcRow + srcX;
+                        int sx = (srcW * x) / dstW;
+                        int si = srcRow + sx;
 
                         if ((uint)si >= (uint)srcBuf.Length)
                         {
@@ -2851,8 +2273,7 @@ namespace OpenVikings.NXBasics
                             continue;
                         }
 
-                        byte idx = srcBuf[si];
-                        ushort color = table[idx];
+                        ushort color = table16[srcBuf[si]];
                         WritePixel16(dstBuf, dstBase, dstRowStrideBytes, x, y, color);
                     }
                 }
@@ -2867,19 +2288,19 @@ namespace OpenVikings.NXBasics
                     return;
                 }
 
-                int srcRowStrideBytes = srcPitch; // 1 byte per pixel
-                int dstRowStrideBytes = dstPitch;
+                int srcRowStrideBytes = srcPitchPixels;
+                int dstRowStrideBytes = dstPitchPixels;
 
                 for (int y = 0; y < dstH; y++)
                 {
-                    int srcY = (srcH * y) / dstH;
-                    int srcRow = checked(srcBase + srcY * srcRowStrideBytes);
+                    int sy = (srcH * y) / dstH;
+                    int srcRow = checked(srcBase + sy * srcRowStrideBytes);
                     int dstRow = checked(dstBase + y * dstRowStrideBytes);
 
                     for (int x = 0; x < dstW; x++)
                     {
-                        int srcX = (srcW * x) / dstW;
-                        int si = srcRow + srcX;
+                        int sx = (srcW * x) / dstW;
+                        int si = srcRow + sx;
                         int di = dstRow + x;
 
                         if ((uint)si >= (uint)srcBuf.Length || (uint)di >= (uint)dstBuf.Length)
@@ -2931,7 +2352,7 @@ namespace OpenVikings.NXBasics
                 (buffer[bi + 3] << 24));
         }
 
-        private static void WritePixel32(byte[] buffer, int baseOffsetBytes, int rowStrideBytes, int x, int y, uint value)
+        internal static void WritePixel32(byte[] buffer, int baseOffsetBytes, int rowStrideBytes, int x, int y, uint value)
         {
             int bi = checked(baseOffsetBytes + y * rowStrideBytes + x * 4);
             if ((uint)(bi + 3) >= (uint)buffer.Length)
@@ -2944,6 +2365,7 @@ namespace OpenVikings.NXBasics
             buffer[bi + 2] = (byte)((value >> 16) & 0xFF);
             buffer[bi + 3] = (byte)((value >> 24) & 0xFF);
         }
+
         #endregion
 
         #region NXBasics::CBitmap::CopyOutOfBitmap()
@@ -3040,7 +2462,7 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffsetBytes, out int pitchPixels, out int bytesPerPixel))
+            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffsetBytes, out int pitchBytes, out int bytesPerPixel))
             {
                 return;
             }
@@ -3055,21 +2477,24 @@ namespace OpenVikings.NXBasics
                     return;
                 }
 
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
+                CPalette? pal = _palette ?? CXBSystemManager.sPalettePtr;
+                if (pal == null)
+                {
+                    return;
+                }
+
                 uint color = pal.GetTrueColorWord(index);
 
-                int rowStrideBytes = checked(pitchPixels * 4);
-                int bi = checked(baseOffsetBytes + relY * rowStrideBytes + relX * 4);
-
+                int bi = checked(baseOffsetBytes + relY * pitchBytes + relX * 4);
                 if ((uint)(bi + 3) >= (uint)buffer.Length)
                 {
                     return;
                 }
 
-                buffer[bi + 0] = (byte)(color & 0xFF);
-                buffer[bi + 1] = (byte)((color >> 8) & 0xFF);
-                buffer[bi + 2] = (byte)((color >> 16) & 0xFF);
-                buffer[bi + 3] = (byte)((color >> 24) & 0xFF);
+                buffer[bi + 0] = (byte)(color & 0xFFu);
+                buffer[bi + 1] = (byte)((color >> 8) & 0xFFu);
+                buffer[bi + 2] = (byte)((color >> 16) & 0xFFu);
+                buffer[bi + 3] = (byte)((color >> 24) & 0xFFu);
                 return;
             }
 
@@ -3080,19 +2505,22 @@ namespace OpenVikings.NXBasics
                     return;
                 }
 
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
+                CPalette? pal = _palette ?? CXBSystemManager.sPalettePtr;
+                if (pal == null)
+                {
+                    return;
+                }
+
                 ushort color = pal.GetHighColorWord(index);
 
-                int rowStrideBytes = checked(pitchPixels * 2);
-                int bi = checked(baseOffsetBytes + relY * rowStrideBytes + relX * 2);
-
+                int bi = checked(baseOffsetBytes + relY * pitchBytes + relX * 2);
                 if ((uint)(bi + 1) >= (uint)buffer.Length)
                 {
                     return;
                 }
 
-                buffer[bi + 0] = (byte)(color & 0xFF);
-                buffer[bi + 1] = (byte)((color >> 8) & 0xFF);
+                buffer[bi + 0] = (byte)(color & 0xFFu);
+                buffer[bi + 1] = (byte)((color >> 8) & 0xFFu);
                 return;
             }
 
@@ -3103,7 +2531,7 @@ namespace OpenVikings.NXBasics
                     return;
                 }
 
-                int bi = checked(baseOffsetBytes + relY * pitchPixels + relX);
+                int bi = checked(baseOffsetBytes + relY * pitchBytes + relX);
                 if ((uint)bi >= (uint)buffer.Length)
                 {
                     return;
@@ -3126,7 +2554,7 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffsetBytes, out int pitchPixels, out int bytesPerPixel))
+            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffsetBytes, out int pitchBytes, out int bytesPerPixel))
             {
                 return;
             }
@@ -3139,16 +2567,14 @@ namespace OpenVikings.NXBasics
             int relX = x - _rect.X;
             int relY = y - _rect.Y;
 
-            int rowStrideBytes = checked(pitchPixels * 2);
-            int bi = checked(baseOffsetBytes + relY * rowStrideBytes + relX * 2);
-
+            int bi = checked(baseOffsetBytes + relY * pitchBytes + relX * 2);
             if ((uint)(bi + 1) >= (uint)buffer.Length)
             {
                 return;
             }
 
-            buffer[bi + 0] = (byte)(value & 0xFF);
-            buffer[bi + 1] = (byte)((value >> 8) & 0xFF);
+            buffer[bi + 0] = (byte)(value & 0xFFu);
+            buffer[bi + 1] = (byte)((value >> 8) & 0xFFu);
         }
 
         // NXBasics::CBitmap::Draw_SetPixel(int, int, unsigned int) const
@@ -3164,7 +2590,7 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffsetBytes, out int pitchPixels, out int bytesPerPixel))
+            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffsetBytes, out int pitchBytes, out int bytesPerPixel))
             {
                 return;
             }
@@ -3177,18 +2603,16 @@ namespace OpenVikings.NXBasics
             int relX = x - _rect.X;
             int relY = y - _rect.Y;
 
-            int rowStrideBytes = checked(pitchPixels * 4);
-            int bi = checked(baseOffsetBytes + relY * rowStrideBytes + relX * 4);
-
+            int bi = checked(baseOffsetBytes + relY * pitchBytes + relX * 4);
             if ((uint)(bi + 3) >= (uint)buffer.Length)
             {
                 return;
             }
 
-            buffer[bi + 0] = (byte)(value & 0xFF);
-            buffer[bi + 1] = (byte)((value >> 8) & 0xFF);
-            buffer[bi + 2] = (byte)((value >> 16) & 0xFF);
-            buffer[bi + 3] = (byte)((value >> 24) & 0xFF);
+            buffer[bi + 0] = (byte)(value & 0xFFu);
+            buffer[bi + 1] = (byte)((value >> 8) & 0xFFu);
+            buffer[bi + 2] = (byte)((value >> 16) & 0xFFu);
+            buffer[bi + 3] = (byte)((value >> 24) & 0xFFu);
         }
 
         // NXBasics::CBitmap::Draw_SetPixel(int, int, NXBasics::SColorRGB const&) const
@@ -3201,21 +2625,38 @@ namespace OpenVikings.NXBasics
 
             if (_bpp == 0x20)
             {
-                uint v = CXBSystemManager.sTrueColorCreatorPtr.GetTrueColorWord(in color);
+                CTrueColorCreator? creator = CXBSystemManager.sTrueColorCreatorPtr;
+                if (creator == null || !creator.IsEnabled)
+                {
+                    return;
+                }
+
+                uint v = creator.GetTrueColorWord(in color);
                 Draw_SetPixel(x, y, v);
                 return;
             }
 
             if (_bpp == 0x10)
             {
-                ushort v = CXBSystemManager.sHighColorCreatorPtr.GetHighColorWord(color.R, color.G, color.B);
+                CHighColorCreator? creator = CXBSystemManager.sHighColorCreatorPtr;
+                if (creator == null || !creator.IsEnabled)
+                {
+                    return;
+                }
+
+                ushort v = creator.GetHighColorWord(color.R, color.G, color.B);
                 Draw_SetPixel(x, y, v);
                 return;
             }
 
             if (_bpp == 0x08)
             {
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
+                CPalette? pal = _palette ?? CXBSystemManager.sPalettePtr;
+                if (pal == null)
+                {
+                    return;
+                }
+
                 byte idx = pal.FindMatchingColor(color.R, color.G, color.B);
                 Draw_SetPixel(x, y, idx);
             }
@@ -3224,7 +2665,7 @@ namespace OpenVikings.NXBasics
         // NXBasics::CBitmap::Draw_SetPixelUnclipped(int, int, NXBasics::SColorRGB const&) const
         internal void Draw_SetPixelUnclipped(int x, int y, in SColorRGB color)
         {
-            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffsetBytes, out int pitchPixels, out int bytesPerPixel))
+            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffsetBytes, out int pitchBytes, out int bytesPerPixel))
             {
                 return;
             }
@@ -3244,20 +2685,24 @@ namespace OpenVikings.NXBasics
                     return;
                 }
 
-                uint v = CXBSystemManager.sTrueColorCreatorPtr.GetTrueColorWord(in color);
+                CTrueColorCreator? creator = CXBSystemManager.sTrueColorCreatorPtr;
+                if (creator == null || !creator.IsEnabled)
+                {
+                    return;
+                }
 
-                int rowStrideBytes = checked(pitchPixels * 4);
-                int bi = checked(baseOffsetBytes + relY * rowStrideBytes + relX * 4);
+                uint v = creator.GetTrueColorWord(in color);
 
+                int bi = checked(baseOffsetBytes + relY * pitchBytes + relX * 4);
                 if ((uint)(bi + 3) >= (uint)buffer.Length)
                 {
                     return;
                 }
 
-                buffer[bi + 0] = (byte)(v & 0xFF);
-                buffer[bi + 1] = (byte)((v >> 8) & 0xFF);
-                buffer[bi + 2] = (byte)((v >> 16) & 0xFF);
-                buffer[bi + 3] = (byte)((v >> 24) & 0xFF);
+                buffer[bi + 0] = (byte)(v & 0xFFu);
+                buffer[bi + 1] = (byte)((v >> 8) & 0xFFu);
+                buffer[bi + 2] = (byte)((v >> 16) & 0xFFu);
+                buffer[bi + 3] = (byte)((v >> 24) & 0xFFu);
                 return;
             }
 
@@ -3268,18 +2713,22 @@ namespace OpenVikings.NXBasics
                     return;
                 }
 
-                ushort v = CXBSystemManager.sHighColorCreatorPtr.GetHighColorWord(color.R, color.G, color.B);
+                CHighColorCreator? creator = CXBSystemManager.sHighColorCreatorPtr;
+                if (creator == null || !creator.IsEnabled)
+                {
+                    return;
+                }
 
-                int rowStrideBytes = checked(pitchPixels * 2);
-                int bi = checked(baseOffsetBytes + relY * rowStrideBytes + relX * 2);
+                ushort v = creator.GetHighColorWord(color.R, color.G, color.B);
 
+                int bi = checked(baseOffsetBytes + relY * pitchBytes + relX * 2);
                 if ((uint)(bi + 1) >= (uint)buffer.Length)
                 {
                     return;
                 }
 
-                buffer[bi + 0] = (byte)(v & 0xFF);
-                buffer[bi + 1] = (byte)((v >> 8) & 0xFF);
+                buffer[bi + 0] = (byte)(v & 0xFFu);
+                buffer[bi + 1] = (byte)((v >> 8) & 0xFFu);
                 return;
             }
 
@@ -3290,10 +2739,15 @@ namespace OpenVikings.NXBasics
                     return;
                 }
 
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
+                CPalette? pal = _palette ?? CXBSystemManager.sPalettePtr;
+                if (pal == null)
+                {
+                    return;
+                }
+
                 byte idx = pal.FindMatchingColor(color.R, color.G, color.B);
 
-                int bi = checked(baseOffsetBytes + relY * pitchPixels + relX);
+                int bi = checked(baseOffsetBytes + relY * pitchBytes + relX);
                 if ((uint)bi >= (uint)buffer.Length)
                 {
                     return;
@@ -3306,28 +2760,24 @@ namespace OpenVikings.NXBasics
         // NXBasics::CBitmap::IsPointInside(int, int) const
         internal bool IsPointInside(int x, int y)
         {
-            int rightExclusive = checked(_rect.X + _rect.Width);
-            int bottomExclusive = checked(_rect.Y + _rect.Height);
-
-            if (_rect.X <= x && x < rightExclusive && _rect.Y <= y)
+            if (x < _rect.X || y < _rect.Y)
             {
-                return y < bottomExclusive;
+                return false;
             }
 
-            return false;
+            int relX = x - _rect.X;
+            int relY = y - _rect.Y;
+
+            return (uint)relX < (uint)_rect.Width && (uint)relY < (uint)_rect.Height;
         }
         #endregion
 
         #region NXBasics::CBitmap::Draw_Box()
+
         // NXBasics::CBitmap::Draw_Box(NXBasics::SRectangle, unsigned char) const
         internal void Draw_Box(ref SRectangle rect, byte index)
         {
             rect.Validate();
-
-            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffsetBytes, out int pitchPixels, out int bytesPerPixel))
-            {
-                return;
-            }
 
             if (!rect.IsTouching(_rect))
             {
@@ -3337,6 +2787,11 @@ namespace OpenVikings.NXBasics
             rect.CutInside(_rect);
 
             if (rect.Width <= 0 || rect.Height <= 0)
+            {
+                return;
+            }
+
+            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffsetBytes, out int pitchBytes, out int bytesPerPixel))
             {
                 return;
             }
@@ -3351,13 +2806,16 @@ namespace OpenVikings.NXBasics
                     return;
                 }
 
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
+                CPalette? pal = _palette ?? CXBSystemManager.sPalettePtr;
+                if (pal == null)
+                {
+                    return;
+                }
+
                 uint color = pal.GetTrueColorWord(index);
 
-                int rowStrideBytes = checked(pitchPixels * 4);
-                int start = checked(baseOffsetBytes + relY * rowStrideBytes + relX * 4);
-
-                FillBlock32(buffer, start, rowStrideBytes, rect.Width, rect.Height, color);
+                int start = checked(baseOffsetBytes + relY * pitchBytes + relX * 4);
+                FillBlock32(buffer, start, pitchBytes, rect.Width, rect.Height, color);
                 return;
             }
 
@@ -3368,13 +2826,16 @@ namespace OpenVikings.NXBasics
                     return;
                 }
 
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
+                CPalette? pal = _palette ?? CXBSystemManager.sPalettePtr;
+                if (pal == null)
+                {
+                    return;
+                }
+
                 ushort color = pal.GetHighColorWord(index);
 
-                int rowStrideBytes = checked(pitchPixels * 2);
-                int start = checked(baseOffsetBytes + relY * rowStrideBytes + relX * 2);
-
-                FillBlock16(buffer, start, rowStrideBytes, rect.Width, rect.Height, color);
+                int start = checked(baseOffsetBytes + relY * pitchBytes + relX * 2);
+                FillBlock16(buffer, start, pitchBytes, rect.Width, rect.Height, color);
                 return;
             }
 
@@ -3385,10 +2846,8 @@ namespace OpenVikings.NXBasics
                     return;
                 }
 
-                int rowStrideBytes = pitchPixels;
-                int start = checked(baseOffsetBytes + relY * rowStrideBytes + relX);
-
-                FillBlock8(buffer, start, rowStrideBytes, rect.Width, rect.Height, index);
+                int start = checked(baseOffsetBytes + relY * pitchBytes + relX);
+                FillBlock8(buffer, start, pitchBytes, rect.Width, rect.Height, index);
             }
         }
 
@@ -3402,16 +2861,6 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffsetBytes, out int pitchPixels, out int bytesPerPixel))
-            {
-                return;
-            }
-
-            if (bytesPerPixel != 2)
-            {
-                return;
-            }
-
             if (!rect.IsTouching(_rect))
             {
                 return;
@@ -3424,13 +2873,21 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
+            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffsetBytes, out int pitchBytes, out int bytesPerPixel))
+            {
+                return;
+            }
+
+            if (bytesPerPixel != 2)
+            {
+                return;
+            }
+
             int relX = rect.X - _rect.X;
             int relY = rect.Y - _rect.Y;
 
-            int rowStrideBytes = checked(pitchPixels * 2);
-            int start = checked(baseOffsetBytes + relY * rowStrideBytes + relX * 2);
-
-            FillBlock16(buffer, start, rowStrideBytes, rect.Width, rect.Height, value);
+            int start = checked(baseOffsetBytes + relY * pitchBytes + relX * 2);
+            FillBlock16(buffer, start, pitchBytes, rect.Width, rect.Height, value);
         }
 
         // NXBasics::CBitmap::Draw_Box(NXBasics::SRectangle, unsigned int) const
@@ -3443,16 +2900,6 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffsetBytes, out int pitchPixels, out int bytesPerPixel))
-            {
-                return;
-            }
-
-            if (bytesPerPixel != 4)
-            {
-                return;
-            }
-
             if (!rect.IsTouching(_rect))
             {
                 return;
@@ -3465,13 +2912,21 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
+            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffsetBytes, out int pitchBytes, out int bytesPerPixel))
+            {
+                return;
+            }
+
+            if (bytesPerPixel != 4)
+            {
+                return;
+            }
+
             int relX = rect.X - _rect.X;
             int relY = rect.Y - _rect.Y;
 
-            int rowStrideBytes = checked(pitchPixels * 4);
-            int start = checked(baseOffsetBytes + relY * rowStrideBytes + relX * 4);
-
-            FillBlock32(buffer, start, rowStrideBytes, rect.Width, rect.Height, value);
+            int start = checked(baseOffsetBytes + relY * pitchBytes + relX * 4);
+            FillBlock32(buffer, start, pitchBytes, rect.Width, rect.Height, value);
         }
 
         // NXBasics::CBitmap::Draw_Box(NXBasics::SRectangle const&, NXBasics::SColorRGB const&) const
@@ -3479,16 +2934,28 @@ namespace OpenVikings.NXBasics
         {
             if (_bpp == 0x20)
             {
+                CTrueColorCreator? creator = CXBSystemManager.sTrueColorCreatorPtr;
+                if (creator == null || !creator.IsEnabled)
+                {
+                    return;
+                }
+
                 SRectangle r = input;
-                uint v = CXBSystemManager.sTrueColorCreatorPtr.GetTrueColorWord(in color);
+                uint v = creator.GetTrueColorWord(in color);
                 Draw_Box(ref r, v);
                 return;
             }
 
             if (_bpp == 0x10)
             {
+                CHighColorCreator? creator = CXBSystemManager.sHighColorCreatorPtr;
+                if (creator == null || !creator.IsEnabled)
+                {
+                    return;
+                }
+
                 SRectangle r = input;
-                ushort v = CXBSystemManager.sHighColorCreatorPtr.GetHighColorWord(color.R, color.G, color.B);
+                ushort v = creator.GetHighColorWord(color.R, color.G, color.B);
                 Draw_Box(ref r, v);
                 return;
             }
@@ -3497,26 +2964,37 @@ namespace OpenVikings.NXBasics
             {
                 SRectangle r = input;
 
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
-                byte idx = pal.FindMatchingColor(color.R, color.G, color.B);
+                CPalette? pal = _palette ?? CXBSystemManager.sPalettePtr;
+                if (pal == null)
+                {
+                    return;
+                }
 
+                byte idx = pal.FindMatchingColor(color.R, color.G, color.B);
                 Draw_Box(ref r, idx);
             }
         }
+
         #endregion
 
         #region NXBasics::CBitmap::Draw_Rectangle()
+
         // NXBasics::CBitmap::Draw_Rectangle(NXBasics::SRectangle, unsigned char) const
         internal void Draw_Rectangle(ref SRectangle rect, byte index)
         {
             rect.Validate();
 
-            if (!TryGetPixelBuffer(out _, out _, out _, out _))
+            if (!rect.IsTouching(_rect))
             {
                 return;
             }
 
-            if (!rect.IsTouching(_rect))
+            if (rect.Width <= 0 || rect.Height <= 0)
+            {
+                return;
+            }
+
+            if (!TryGetPixelBuffer(out _, out _, out _, out _))
             {
                 return;
             }
@@ -3527,21 +3005,27 @@ namespace OpenVikings.NXBasics
             SRectangle left = new(rect.X, rect.Y, 1, rect.Height);
             Draw_Box(ref left, index);
 
-            SRectangle bottom = new(rect.X, rect.Y + rect.Height - 1, rect.Width, 1);
-            Draw_Box(ref bottom, index);
+            if (rect.Height > 1)
+            {
+                SRectangle bottom = new(rect.X, checked(rect.Y + rect.Height - 1), rect.Width, 1);
+                Draw_Box(ref bottom, index);
+            }
 
-            SRectangle right = new(rect.X + rect.Width - 1, rect.Y, 1, rect.Height);
-            Draw_Box(ref right, index);
+            if (rect.Width > 1)
+            {
+                SRectangle right = new(checked(rect.X + rect.Width - 1), rect.Y, 1, rect.Height);
+                Draw_Box(ref right, index);
+            }
         }
 
         // NXBasics::CBitmap::Draw_Rectangle(NXBasics::SRectangle const&, NXBasics::SColorRGB const&) const
         internal void Draw_Rectangle(in SRectangle rect, in SColorRGB color)
         {
-            SRectangle r = new(in rect);
+            SRectangle r = rect;
 
             if (_bpp == 0x20)
             {
-                CTrueColorCreator trueColorCreator = CXBSystemManager.sTrueColorCreatorPtr;
+                CTrueColorCreator? trueColorCreator = CXBSystemManager.sTrueColorCreatorPtr;
                 if (trueColorCreator == null || !trueColorCreator.IsEnabled)
                 {
                     return;
@@ -3554,7 +3038,7 @@ namespace OpenVikings.NXBasics
 
             if (_bpp == 0x10)
             {
-                CHighColorCreator highColorCreator = CXBSystemManager.sHighColorCreatorPtr;
+                CHighColorCreator? highColorCreator = CXBSystemManager.sHighColorCreatorPtr;
                 if (highColorCreator == null || !highColorCreator.IsEnabled)
                 {
                     return;
@@ -3567,8 +3051,13 @@ namespace OpenVikings.NXBasics
 
             if (_bpp == 0x08)
             {
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
-                byte idx = pal.FindMatchingColor(color);
+                CPalette? pal = _palette ?? CXBSystemManager.sPalettePtr;
+                if (pal == null)
+                {
+                    return;
+                }
+
+                byte idx = pal.FindMatchingColor(color.R, color.G, color.B);
                 Draw_Rectangle(ref r, idx);
             }
         }
@@ -3578,7 +3067,7 @@ namespace OpenVikings.NXBasics
         {
             rect.Validate();
 
-            if (!TryGetPixelBuffer(out _, out _, out _, out _))
+            if (_bpp != 0x10)
             {
                 return;
             }
@@ -3588,10 +3077,28 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
+            if (rect.Width <= 0 || rect.Height <= 0)
+            {
+                return;
+            }
+
+            if (!TryGetPixelBuffer(out _, out _, out _, out _))
+            {
+                return;
+            }
+
             Draw_HorizontalLine(rect.X, rect.Y, (uint)rect.Width, value);
             Draw_VerticalLine(rect.X, rect.Y, (uint)rect.Height, value);
-            Draw_HorizontalLine(rect.X, rect.Y + rect.Height - 1, (uint)rect.Width, value);
-            Draw_VerticalLine(rect.X + rect.Width - 1, rect.Y, (uint)rect.Height, value);
+
+            if (rect.Height > 1)
+            {
+                Draw_HorizontalLine(rect.X, checked(rect.Y + rect.Height - 1), (uint)rect.Width, value);
+            }
+
+            if (rect.Width > 1)
+            {
+                Draw_VerticalLine(checked(rect.X + rect.Width - 1), rect.Y, (uint)rect.Height, value);
+            }
         }
 
         // NXBasics::CBitmap::Draw_Rectangle(NXBasics::SRectangle, unsigned int) const
@@ -3604,27 +3111,46 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            if (!TryGetPixelBuffer(out _, out _, out _, out _))
+            if (!rect.IsTouching(_rect))
             {
                 return;
             }
 
-            if (!rect.IsTouching(_rect))
+            if (rect.Width <= 0 || rect.Height <= 0)
+            {
+                return;
+            }
+
+            if (!TryGetPixelBuffer(out _, out _, out _, out _))
             {
                 return;
             }
 
             Draw_HorizontalLine(rect.X, rect.Y, (uint)rect.Width, value);
             Draw_VerticalLine(rect.X, rect.Y, (uint)rect.Height, value);
-            Draw_HorizontalLine(rect.X, rect.Y + rect.Height - 1, (uint)rect.Width, value);
-            Draw_VerticalLine(rect.X + rect.Width - 1, rect.Y, (uint)rect.Height, value);
+
+            if (rect.Height > 1)
+            {
+                Draw_HorizontalLine(rect.X, checked(rect.Y + rect.Height - 1), (uint)rect.Width, value);
+            }
+
+            if (rect.Width > 1)
+            {
+                Draw_VerticalLine(checked(rect.X + rect.Width - 1), rect.Y, (uint)rect.Height, value);
+            }
         }
+
         #endregion
 
         #region FillBlock8/16/32
         private static void FillBlock8(byte[] buffer, int startIndex, int rowStrideBytes, int widthPixels, int heightPixels, byte value)
         {
-            if (widthPixels <= 0 || heightPixels <= 0)
+            if (buffer == null)
+            {
+                return;
+            }
+
+            if (widthPixels <= 0 || heightPixels <= 0 || rowStrideBytes <= 0)
             {
                 return;
             }
@@ -3633,102 +3159,117 @@ namespace OpenVikings.NXBasics
 
             for (int y = 0; y < heightPixels; y++)
             {
-                int rowStart = checked(startIndex + y * rowStrideBytes);
+                int rowStart = startIndex + y * rowStrideBytes;
                 if ((uint)rowStart >= (uint)buffer.Length)
                 {
                     continue;
                 }
 
-                int count = rowBytes;
                 int avail = buffer.Length - rowStart;
+                int count = rowBytes;
                 if (count > avail)
                 {
                     count = avail;
                 }
 
-                for (int i = 0; i < count; i++)
-                {
-                    buffer[rowStart + i] = value;
-                }
+                buffer.AsSpan(rowStart, count).Fill(value);
             }
         }
 
         private static void FillBlock16(byte[] buffer, int startIndex, int rowStrideBytes, int widthPixels, int heightPixels, ushort value)
         {
-            if (widthPixels <= 0 || heightPixels <= 0)
+            if (buffer == null)
             {
                 return;
             }
 
-            byte lo = (byte)(value & 0xFF);
-            byte hi = (byte)((value >> 8) & 0xFF);
+            if (widthPixels <= 0 || heightPixels <= 0 || rowStrideBytes <= 0)
+            {
+                return;
+            }
 
-            int rowBytes = checked(widthPixels * 2);
+            int rowBytes = widthPixels * 2;
+
+            byte lo = (byte)(value & 0xFFu);
+            byte hi = (byte)((value >> 8) & 0xFFu);
 
             for (int y = 0; y < heightPixels; y++)
             {
-                int rowStart = checked(startIndex + y * rowStrideBytes);
+                int rowStart = startIndex + y * rowStrideBytes;
                 if ((uint)rowStart >= (uint)buffer.Length)
                 {
                     continue;
                 }
 
-                int count = rowBytes;
                 int avail = buffer.Length - rowStart;
+                int count = rowBytes;
                 if (count > avail)
                 {
                     count = avail;
                 }
 
-                // ensure even count for 16-bit writes
-                count = count & ~1;
-
-                for (int i = 0; i < count; i += 2)
+                count &= ~1;
+                if (count <= 0)
                 {
-                    buffer[rowStart + i + 0] = lo;
-                    buffer[rowStart + i + 1] = hi;
+                    continue;
+                }
+
+                int end = rowStart + count;
+                for (int i = rowStart; i < end; i += 2)
+                {
+                    buffer[i + 0] = lo;
+                    buffer[i + 1] = hi;
                 }
             }
         }
 
         private static void FillBlock32(byte[] buffer, int startIndex, int rowStrideBytes, int widthPixels, int heightPixels, uint value)
         {
-            if (widthPixels <= 0 || heightPixels <= 0)
+            if (buffer == null)
             {
                 return;
             }
 
-            byte b0 = (byte)(value & 0xFF);
-            byte b1 = (byte)((value >> 8) & 0xFF);
-            byte b2 = (byte)((value >> 16) & 0xFF);
-            byte b3 = (byte)((value >> 24) & 0xFF);
+            if (widthPixels <= 0 || heightPixels <= 0 || rowStrideBytes <= 0)
+            {
+                return;
+            }
 
-            int rowBytes = checked(widthPixels * 4);
+            int rowBytes = widthPixels * 4;
+
+            byte b0 = (byte)(value & 0xFFu);
+            byte b1 = (byte)((value >> 8) & 0xFFu);
+            byte b2 = (byte)((value >> 16) & 0xFFu);
+            byte b3 = (byte)((value >> 24) & 0xFFu);
 
             for (int y = 0; y < heightPixels; y++)
             {
-                int rowStart = checked(startIndex + y * rowStrideBytes);
+                int rowStart = startIndex + y * rowStrideBytes;
                 if ((uint)rowStart >= (uint)buffer.Length)
                 {
                     continue;
                 }
 
-                int count = rowBytes;
                 int avail = buffer.Length - rowStart;
+                int count = rowBytes;
                 if (count > avail)
                 {
                     count = avail;
                 }
 
-                // ensure multiple of 4
-                count = count & ~3;
-
-                for (int i = 0; i < count; i += 4)
+                count &= ~3;
+                if (count <= 0)
                 {
-                    buffer[rowStart + i + 0] = b0;
-                    buffer[rowStart + i + 1] = b1;
-                    buffer[rowStart + i + 2] = b2;
-                    buffer[rowStart + i + 3] = b3;
+                    continue;
+                }
+
+                int end = rowStart + count;
+                for (int i = rowStart; i < end; i += 4)
+                {
+                    buffer[i + 0] = b0;
+                    buffer[i + 1] = b1;
+                    buffer[i + 2] = b2;
+                    buffer[i + 3] = b3;
                 }
             }
         }
@@ -3759,11 +3300,6 @@ namespace OpenVikings.NXBasics
             }
 
             SRectangle tmp = new(x, y, checked((int)width), 1);
-            if (!TryPrepareDrawRect(ref tmp))
-            {
-                return;
-            }
-
             Draw_Box(ref tmp, value);
         }
 
@@ -3776,11 +3312,6 @@ namespace OpenVikings.NXBasics
             }
 
             SRectangle tmp = new(x, y, 1, checked((int)height));
-            if (!TryPrepareDrawRect(ref tmp))
-            {
-                return;
-            }
-
             Draw_Box(ref tmp, value);
         }
 
@@ -3793,11 +3324,6 @@ namespace OpenVikings.NXBasics
             }
 
             SRectangle tmp = new(x, y, checked((int)width), 1);
-            if (!TryPrepareDrawRect(ref tmp))
-            {
-                return;
-            }
-
             Draw_Box(ref tmp, value);
         }
 
@@ -3810,50 +3336,109 @@ namespace OpenVikings.NXBasics
             }
 
             SRectangle tmp = new(x, y, 1, checked((int)height));
-            if (!TryPrepareDrawRect(ref tmp))
-            {
-                return;
-            }
-
             Draw_Box(ref tmp, value);
         }
 
         // NXBasics::CBitmap::Draw_StippleBox(NXBasics::SRectangle, unsigned char) const
         internal void Draw_StippleBox(ref SRectangle rect, byte index)
         {
-            if (!TryPrepareDrawRectAndClip(ref rect))
+            rect.Validate();
+
+            if (!rect.IsTouching(_rect))
+            {
+                return;
+            }
+
+            rect.CutInside(_rect);
+
+            if (rect.Width <= 0 || rect.Height <= 0)
+            {
+                return;
+            }
+
+            if (!TryGetPixelBuffer(out _, out _, out _, out _))
             {
                 return;
             }
 
             int x0 = rect.X;
             int y0 = rect.Y;
-            int xEndExclusive = x0 + rect.Width;
-            int yEndExclusive = y0 + rect.Height;
 
-            byte parity = (byte)(x0 & 1);
+            int xEndExclusive = checked(x0 + rect.Width);
+            int yEndExclusive = checked(y0 + rect.Height);
 
             if (_bpp == 0x20)
             {
-                CPalette palette = _palette ?? CXBSystemManager.sPalettePtr;
+                CPalette? palette = _palette ?? CXBSystemManager.sPalettePtr;
+                if (palette == null)
+                {
+                    return;
+                }
+
                 uint color = palette.GetTrueColorWord(index);
 
-                DrawStippleCore(x0, y0, xEndExclusive, yEndExclusive, parity, color);
+                byte rowParity = (byte)(x0 & 1);
+                for (int y = y0; y < yEndExclusive; y++)
+                {
+                    int parity = rowParity;
+                    for (int x = x0; x < xEndExclusive; x++)
+                    {
+                        if (((x & 1) == 0) == (parity == 0))
+                        {
+                            Draw_SetPixel(x, y, color);
+                        }
+                    }
+
+                    rowParity ^= 1;
+                }
+
                 return;
             }
 
             if (_bpp == 0x10)
             {
-                CPalette palette = _palette ?? CXBSystemManager.sPalettePtr;
+                CPalette? palette = _palette ?? CXBSystemManager.sPalettePtr;
+                if (palette == null)
+                {
+                    return;
+                }
+
                 ushort color = palette.GetHighColorWord(index);
 
-                DrawStippleCore(x0, y0, xEndExclusive, yEndExclusive, parity, color);
+                byte rowParity = (byte)(x0 & 1);
+                for (int y = y0; y < yEndExclusive; y++)
+                {
+                    int parity = rowParity;
+                    for (int x = x0; x < xEndExclusive; x++)
+                    {
+                        if (((x & 1) == 0) == (parity == 0))
+                        {
+                            Draw_SetPixel(x, y, color);
+                        }
+                    }
+
+                    rowParity ^= 1;
+                }
+
                 return;
             }
 
             if (_bpp == 0x08)
             {
-                DrawStippleCore(x0, y0, xEndExclusive, yEndExclusive, parity, index);
+                byte rowParity = (byte)(x0 & 1);
+                for (int y = y0; y < yEndExclusive; y++)
+                {
+                    int parity = rowParity;
+                    for (int x = x0; x < xEndExclusive; x++)
+                    {
+                        if (((x & 1) == 0) == (parity == 0))
+                        {
+                            Draw_SetPixel(x, y, index);
+                        }
+                    }
+
+                    rowParity ^= 1;
+                }
             }
         }
 
@@ -3862,22 +3447,39 @@ namespace OpenVikings.NXBasics
         {
             if (_bpp == 0x20)
             {
-                uint v = CXBSystemManager.sTrueColorCreatorPtr.GetTrueColorWord(in color);
+                CTrueColorCreator? creator = CXBSystemManager.sTrueColorCreatorPtr;
+                if (creator == null || !creator.IsEnabled)
+                {
+                    return;
+                }
+
+                uint v = creator.GetTrueColorWord(in color);
                 Draw_HorizontalLine(x, y, width, v);
                 return;
             }
 
             if (_bpp == 0x10)
             {
-                ushort v = CXBSystemManager.sHighColorCreatorPtr.GetHighColorWord(color.R, color.G, color.B);
+                CHighColorCreator? creator = CXBSystemManager.sHighColorCreatorPtr;
+                if (creator == null || !creator.IsEnabled)
+                {
+                    return;
+                }
+
+                ushort v = creator.GetHighColorWord(color.R, color.G, color.B);
                 Draw_HorizontalLine(x, y, width, v);
                 return;
             }
 
             if (_bpp == 0x08)
             {
-                CPalette palette = _palette ?? CXBSystemManager.sPalettePtr;
-                byte idx = palette.FindMatchingColor(color);
+                CPalette? palette = _palette ?? CXBSystemManager.sPalettePtr;
+                if (palette == null)
+                {
+                    return;
+                }
+
+                byte idx = palette.FindMatchingColor(color.R, color.G, color.B);
                 Draw_HorizontalLine(x, y, width, idx);
             }
         }
@@ -3887,22 +3489,39 @@ namespace OpenVikings.NXBasics
         {
             if (_bpp == 0x20)
             {
-                uint v = CXBSystemManager.sTrueColorCreatorPtr.GetTrueColorWord(in color);
+                CTrueColorCreator? creator = CXBSystemManager.sTrueColorCreatorPtr;
+                if (creator == null || !creator.IsEnabled)
+                {
+                    return;
+                }
+
+                uint v = creator.GetTrueColorWord(in color);
                 Draw_VerticalLine(x, y, height, v);
                 return;
             }
 
             if (_bpp == 0x10)
             {
-                ushort v = CXBSystemManager.sHighColorCreatorPtr.GetHighColorWord(color.R, color.G, color.B);
+                CHighColorCreator? creator = CXBSystemManager.sHighColorCreatorPtr;
+                if (creator == null || !creator.IsEnabled)
+                {
+                    return;
+                }
+
+                ushort v = creator.GetHighColorWord(color.R, color.G, color.B);
                 Draw_VerticalLine(x, y, height, v);
                 return;
             }
 
             if (_bpp == 0x08)
             {
-                CPalette palette = _palette ?? CXBSystemManager.sPalettePtr;
-                byte idx = palette.FindMatchingColor(color);
+                CPalette? palette = _palette ?? CXBSystemManager.sPalettePtr;
+                if (palette == null)
+                {
+                    return;
+                }
+
+                byte idx = palette.FindMatchingColor(color.R, color.G, color.B);
                 Draw_VerticalLine(x, y, height, idx);
             }
         }
@@ -3920,7 +3539,54 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            DrawLineCore(x0, y0, x1, y1, index);
+            int dx = x1 - x0;
+            int dy = y1 - y0;
+
+            int stepX = dx != 0 ? (dx > 0 ? 1 : -1) : 0;
+            int stepY = dy != 0 ? (dy > 0 ? 1 : -1) : 0;
+
+            int absDx = dx < 0 ? -dx : dx;
+            int absDy = dy < 0 ? -dy : dy;
+
+            int twiceAbsDx = absDx * 2;
+            int twiceAbsDy = absDy * 2;
+
+            Draw_SetPixel(x0, y0, index);
+
+            if (absDx < absDy)
+            {
+                int err = twiceAbsDx - absDy;
+
+                while (y0 != y1)
+                {
+                    int sub = (-1 < err) ? twiceAbsDy : 0;
+                    int addX = (-1 < err) ? stepX : 0;
+
+                    x0 += addX;
+                    y0 += stepY;
+
+                    err = (err + twiceAbsDx) - sub;
+
+                    Draw_SetPixel(x0, y0, index);
+                }
+            }
+            else
+            {
+                int err = twiceAbsDy - absDx;
+
+                while (x0 != x1)
+                {
+                    int sub = (-1 < err) ? twiceAbsDx : 0;
+                    int addY = (-1 < err) ? stepY : 0;
+
+                    y0 += addY;
+                    x0 += stepX;
+
+                    err = (err + twiceAbsDy) - sub;
+
+                    Draw_SetPixel(x0, y0, index);
+                }
+            }
         }
 
         // NXBasics::CBitmap::Draw_Line(int, int, int, int, unsigned short) const
@@ -3941,7 +3607,68 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            DrawLineCore(x0, y0, x1, y1, value);
+            int dx = x1 - x0;
+            int dy = y1 - y0;
+
+            int stepX = dx != 0 ? (dx > 0 ? 1 : -1) : 0;
+            int stepY = dy != 0 ? (dy > 0 ? 1 : -1) : 0;
+
+            int absDx = dx < 0 ? -dx : dx;
+            int absDy = dy < 0 ? -dy : dy;
+
+            int twiceAbsDx = absDx * 2;
+            int twiceAbsDy = absDy * 2;
+
+            if (absDx < absDy)
+            {
+                int err = twiceAbsDx - absDy;
+
+                while (true)
+                {
+                    if (IsInsideRect(x0, y0))
+                    {
+                        Draw_SetPixel(x0, y0, value);
+                    }
+
+                    if (y0 == y1)
+                    {
+                        return;
+                    }
+
+                    int sub = (-1 < err) ? twiceAbsDy : 0;
+                    int addX = (-1 < err) ? stepX : 0;
+
+                    x0 += addX;
+                    y0 += stepY;
+
+                    err = (err + twiceAbsDx) - sub;
+                }
+            }
+            else
+            {
+                int err = twiceAbsDy - absDx;
+
+                while (true)
+                {
+                    if (IsInsideRect(x0, y0))
+                    {
+                        Draw_SetPixel(x0, y0, value);
+                    }
+
+                    if (x0 == x1)
+                    {
+                        return;
+                    }
+
+                    int sub = (-1 < err) ? twiceAbsDx : 0;
+                    int addY = (-1 < err) ? stepY : 0;
+
+                    y0 += addY;
+                    x0 += stepX;
+
+                    err = (err + twiceAbsDy) - sub;
+                }
+            }
         }
 
         // NXBasics::CBitmap::Draw_Line(int, int, int, int, unsigned int) const
@@ -3962,7 +3689,68 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            DrawLineCore(x0, y0, x1, y1, value);
+            int dx = x1 - x0;
+            int dy = y1 - y0;
+
+            int stepX = dx != 0 ? (dx > 0 ? 1 : -1) : 0;
+            int stepY = dy != 0 ? (dy > 0 ? 1 : -1) : 0;
+
+            int absDx = dx < 0 ? -dx : dx;
+            int absDy = dy < 0 ? -dy : dy;
+
+            int twiceAbsDx = absDx * 2;
+            int twiceAbsDy = absDy * 2;
+
+            if (absDx < absDy)
+            {
+                int err = twiceAbsDx - absDy;
+
+                while (true)
+                {
+                    if (IsInsideRect(x0, y0))
+                    {
+                        Draw_SetPixel(x0, y0, value);
+                    }
+
+                    if (y0 == y1)
+                    {
+                        return;
+                    }
+
+                    int sub = (-1 < err) ? twiceAbsDy : 0;
+                    int addX = (-1 < err) ? stepX : 0;
+
+                    x0 += addX;
+                    y0 += stepY;
+
+                    err = (err + twiceAbsDx) - sub;
+                }
+            }
+            else
+            {
+                int err = twiceAbsDy - absDx;
+
+                while (true)
+                {
+                    if (IsInsideRect(x0, y0))
+                    {
+                        Draw_SetPixel(x0, y0, value);
+                    }
+
+                    if (x0 == x1)
+                    {
+                        return;
+                    }
+
+                    int sub = (-1 < err) ? twiceAbsDx : 0;
+                    int addY = (-1 < err) ? stepY : 0;
+
+                    y0 += addY;
+                    x0 += stepX;
+
+                    err = (err + twiceAbsDy) - sub;
+                }
+            }
         }
 
         // NXBasics::CBitmap::Draw_Line(int, int, int, int, NXBasics::SColorRGB const&) const
@@ -3970,22 +3758,39 @@ namespace OpenVikings.NXBasics
         {
             if (_bpp == 0x20)
             {
-                uint v = CXBSystemManager.sTrueColorCreatorPtr.GetTrueColorWord(in color);
+                CTrueColorCreator? creator = CXBSystemManager.sTrueColorCreatorPtr;
+                if (creator == null || !creator.IsEnabled)
+                {
+                    return;
+                }
+
+                uint v = creator.GetTrueColorWord(in color);
                 Draw_Line(x0, y0, x1, y1, v);
                 return;
             }
 
             if (_bpp == 0x10)
             {
-                ushort v = CXBSystemManager.sHighColorCreatorPtr.GetHighColorWord(color.R, color.G, color.B);
+                CHighColorCreator? creator = CXBSystemManager.sHighColorCreatorPtr;
+                if (creator == null || !creator.IsEnabled)
+                {
+                    return;
+                }
+
+                ushort v = creator.GetHighColorWord(color.R, color.G, color.B);
                 Draw_Line(x0, y0, x1, y1, v);
                 return;
             }
 
             if (_bpp == 0x08)
             {
-                CPalette palette = _palette ?? CXBSystemManager.sPalettePtr;
-                byte idx = palette.FindMatchingColor(color);
+                CPalette? palette = _palette ?? CXBSystemManager.sPalettePtr;
+                if (palette == null)
+                {
+                    return;
+                }
+
+                byte idx = palette.FindMatchingColor(color.R, color.G, color.B);
                 Draw_Line(x0, y0, x1, y1, idx);
             }
         }
@@ -4004,6 +3809,11 @@ namespace OpenVikings.NXBasics
             }
 
             if (!rect.IsTouching(_rect))
+            {
+                return false;
+            }
+
+            if (rect.Width <= 0 || rect.Height <= 0)
             {
                 return false;
             }
@@ -4037,204 +3847,32 @@ namespace OpenVikings.NXBasics
 
         private bool IsLinePossiblyVisible(int x0, int y0, int x1, int y1)
         {
-            if (!((-1 < x0) || (-1 < x1)) || !((-1 < y0) || (-1 < y1)))
+            int left = _rect.X;
+            int top = _rect.Y;
+            int rightExclusive = checked(left + _rect.Width);
+            int bottomExclusive = checked(top + _rect.Height);
+
+            if (x0 < left && x1 < left)
             {
                 return false;
             }
 
-            int maxX = _rect.X + _rect.Width - 1;
-            int maxY = _rect.Y + _rect.Height - 1;
+            if (y0 < top && y1 < top)
+            {
+                return false;
+            }
 
-            if (!((x0 <= maxX) || (x1 <= maxX)) || !((y0 <= maxY) || (y1 <= maxY)))
+            if (x0 >= rightExclusive && x1 >= rightExclusive)
+            {
+                return false;
+            }
+
+            if (y0 >= bottomExclusive && y1 >= bottomExclusive)
             {
                 return false;
             }
 
             return true;
-        }
-
-        private void DrawLineCore(int x0, int y0, int x1, int y1, byte index)
-        {
-            int dx = x1 - x0;
-            int dy = y1 - y0;
-
-            int stepX = (dx != 0) ? ((dx > 0) ? 1 : -1) : 0;
-            int stepY = (dy != 0) ? ((dy > 0) ? 1 : -1) : 0;
-
-            uint absDx = (uint)((dx < 0) ? -dx : dx);
-            uint absDy = (uint)((dy < 0) ? -dy : dy);
-
-            int twiceAbsDx = (int)(absDx * 2);
-            int twiceAbsDy = (int)(absDy * 2);
-
-            Draw_SetPixel(x0, y0, index);
-
-            if (absDx < absDy)
-            {
-                int err = twiceAbsDx - (int)absDy;
-
-                while (y1 != y0)
-                {
-                    int sub = (-1 < err) ? twiceAbsDy : 0;
-                    int addX = (-1 < err) ? stepX : 0;
-
-                    x0 += addX;
-                    y0 += stepY;
-
-                    err = (err + twiceAbsDx) - sub;
-
-                    Draw_SetPixel(x0, y0, index);
-                }
-            }
-            else
-            {
-                int err = twiceAbsDy - (int)absDx;
-
-                while (x1 != x0)
-                {
-                    int sub = (-1 < err) ? twiceAbsDx : 0;
-                    int addY = (-1 < err) ? stepY : 0;
-
-                    y0 += addY;
-                    x0 += stepX;
-
-                    err = (err + twiceAbsDy) - sub;
-
-                    Draw_SetPixel(x0, y0, index);
-                }
-            }
-        }
-
-        private void DrawLineCore(int x0, int y0, int x1, int y1, ushort value)
-        {
-            int dx = x1 - x0;
-            int dy = y1 - y0;
-
-            int stepX = (dx != 0) ? ((dx > 0) ? 1 : -1) : 0;
-            int stepY = (dy != 0) ? ((dy > 0) ? 1 : -1) : 0;
-
-            int absDx = (dx < 0) ? -dx : dx;
-            int absDy = (dy < 0) ? -dy : dy;
-
-            int twiceAbsDx = absDx * 2;
-            int twiceAbsDy = absDy * 2;
-
-            if (absDx < absDy)
-            {
-                int err = twiceAbsDx - absDy;
-
-                while (true)
-                {
-                    if (IsInsideRect(x0, y0))
-                    {
-                        Draw_SetPixel(x0, y0, value);
-                    }
-
-                    if (y1 == y0)
-                    {
-                        return;
-                    }
-
-                    int sub = (-1 < err) ? twiceAbsDy : 0;
-                    int addX = (-1 < err) ? stepX : 0;
-
-                    x0 += addX;
-                    y0 += stepY;
-
-                    err = (err + twiceAbsDx) - sub;
-                }
-            }
-            else
-            {
-                int err = twiceAbsDy - absDx;
-
-                while (true)
-                {
-                    if (IsInsideRect(x0, y0))
-                    {
-                        Draw_SetPixel(x0, y0, value);
-                    }
-
-                    if (x1 == x0)
-                    {
-                        return;
-                    }
-
-                    int sub = (-1 < err) ? twiceAbsDx : 0;
-                    int addY = (-1 < err) ? stepY : 0;
-
-                    y0 += addY;
-                    x0 += stepX;
-
-                    err = (err + twiceAbsDy) - sub;
-                }
-            }
-        }
-
-        private void DrawLineCore(int x0, int y0, int x1, int y1, uint value)
-        {
-            int dx = x1 - x0;
-            int dy = y1 - y0;
-
-            int stepX = (dx != 0) ? ((dx > 0) ? 1 : -1) : 0;
-            int stepY = (dy != 0) ? ((dy > 0) ? 1 : -1) : 0;
-
-            int absDx = (dx < 0) ? -dx : dx;
-            int absDy = (dy < 0) ? -dy : dy;
-
-            int twiceAbsDx = absDx * 2;
-            int twiceAbsDy = absDy * 2;
-
-            if (absDx < absDy)
-            {
-                int err = twiceAbsDx - absDy;
-
-                while (true)
-                {
-                    if (IsInsideRect(x0, y0))
-                    {
-                        Draw_SetPixel(x0, y0, value);
-                    }
-
-                    if (y1 == y0)
-                    {
-                        return;
-                    }
-
-                    int sub = (-1 < err) ? twiceAbsDy : 0;
-                    int addX = (-1 < err) ? stepX : 0;
-
-                    x0 += addX;
-                    y0 += stepY;
-
-                    err = (err + twiceAbsDx) - sub;
-                }
-            }
-            else
-            {
-                int err = twiceAbsDy - absDx;
-
-                while (true)
-                {
-                    if (IsInsideRect(x0, y0))
-                    {
-                        Draw_SetPixel(x0, y0, value);
-                    }
-
-                    if (x1 == x0)
-                    {
-                        return;
-                    }
-
-                    int sub = (-1 < err) ? twiceAbsDx : 0;
-                    int addY = (-1 < err) ? stepY : 0;
-
-                    y0 += addY;
-                    x0 += stepX;
-
-                    err = (err + twiceAbsDy) - sub;
-                }
-            }
         }
 
         private bool IsInsideRect(int x, int y)
@@ -4244,121 +3882,11 @@ namespace OpenVikings.NXBasics
                 return false;
             }
 
-            if (x > (_rect.X + _rect.Width - 1))
-            {
-                return false;
-            }
+            int relX = x - _rect.X;
+            int relY = y - _rect.Y;
 
-            if (y > (_rect.Y + _rect.Height - 1))
-            {
-                return false;
-            }
-
-            return true;
+            return (uint)relX < (uint)_rect.Width && (uint)relY < (uint)_rect.Height;
         }
-
-        private void DrawStippleCore(int x0, int y0, int xEndExclusive, int yEndExclusive, byte parity, byte index)
-        {
-            for (int y = y0; y < yEndExclusive; y++)
-            {
-                int x = x0;
-
-                if (((xEndExclusive - x) & 1) != 0)
-                {
-                    if (((x & 1) == 0) == (parity == 0))
-                    {
-                        Draw_SetPixel(x, y, index);
-                    }
-
-                    x++;
-                }
-
-                while (x != xEndExclusive)
-                {
-                    if (((x & 1) == 0) == (parity == 0))
-                    {
-                        Draw_SetPixel(x, y, index);
-                    }
-                    else
-                    {
-                        Draw_SetPixel(x + 1, y, index);
-                    }
-
-                    x += 2;
-                }
-
-                parity ^= 1;
-            }
-        }
-
-        private void DrawStippleCore(int x0, int y0, int xEndExclusive, int yEndExclusive, byte parity, ushort value)
-        {
-            for (int y = y0; y < yEndExclusive; y++)
-            {
-                int x = x0;
-
-                if (((xEndExclusive - x) & 1) != 0)
-                {
-                    if (((x & 1) == 0) == (parity == 0))
-                    {
-                        Draw_SetPixel(x, y, value);
-                    }
-
-                    x++;
-                }
-
-                while (x != xEndExclusive)
-                {
-                    if (((x & 1) == 0) == (parity == 0))
-                    {
-                        Draw_SetPixel(x, y, value);
-                    }
-                    else
-                    {
-                        Draw_SetPixel(x + 1, y, value);
-                    }
-
-                    x += 2;
-                }
-
-                parity ^= 1;
-            }
-        }
-
-        private void DrawStippleCore(int x0, int y0, int xEndExclusive, int yEndExclusive, byte parity, uint value)
-        {
-            for (int y = y0; y < yEndExclusive; y++)
-            {
-                int x = x0;
-
-                if (((xEndExclusive - x) & 1) != 0)
-                {
-                    if (((x & 1) == 0) == (parity == 0))
-                    {
-                        Draw_SetPixel(x, y, value);
-                    }
-
-                    x++;
-                }
-
-                while (x != xEndExclusive)
-                {
-                    if (((x & 1) == 0) == (parity == 0))
-                    {
-                        Draw_SetPixel(x, y, value);
-                    }
-                    else
-                    {
-                        Draw_SetPixel(x + 1, y, value);
-                    }
-
-                    x += 2;
-                }
-
-                parity ^= 1;
-            }
-        }
-
         #endregion
 
         #region NXBasics::CBitmap::Draw_StippledLine()
@@ -4370,42 +3898,29 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            if (!((-1 < x0) || (-1 < x1)) || !((-1 < y0) || (-1 < y1)))
+            if (!IsLinePossiblyVisible(x0, y0, x1, y1))
             {
                 return;
             }
-
-            int clipRight = _rect.X + _rect.Width - 1;
-            int clipBottom = _rect.Y + _rect.Height - 1;
-
-            if (!((x0 <= clipRight) || (x1 <= clipRight)) || !((y0 <= clipBottom) || (y1 <= clipBottom)))
-            {
-                return;
-            }
-
-            int dy = y1 - y0;
-            int stepY = (dy != 0) ? ((0 < dy) ? 1 : -1) : 0;
 
             int dx = x1 - x0;
-            int stepX = (dx != 0) ? ((0 < dx) ? 1 : -1) : 0;
+            int dy = y1 - y0;
 
-            uint absDx = (uint)((dx < 0) ? -dx : dx);
-            uint absDy = (uint)((dy < 0) ? -dy : dy);
+            int stepX = dx != 0 ? (dx > 0 ? 1 : -1) : 0;
+            int stepY = dy != 0 ? (dy > 0 ? 1 : -1) : 0;
 
-            int twiceAbsDx = (int)(absDx * 2);
-            int twiceAbsDy = (int)(absDy * 2);
+            int absDx = dx < 0 ? -dx : dx;
+            int absDy = dy < 0 ? -dy : dy;
+
+            int twiceAbsDx = absDx * 2;
+            int twiceAbsDy = absDy * 2;
 
             uint counter = 0;
             bool skip = false;
 
-            if (period == 0)
-            {
-                skip = false;
-            }
-
             if (absDx < absDy)
             {
-                int err = twiceAbsDx - (int)absDy;
+                int err = twiceAbsDx - absDy;
 
                 while (true)
                 {
@@ -4414,9 +3929,9 @@ namespace OpenVikings.NXBasics
                         Draw_SetPixel(x0, y0, index);
                     }
 
-                    if (y1 == y0)
+                    if (y0 == y1)
                     {
-                        break;
+                        return;
                     }
 
                     if (period != 0)
@@ -4429,20 +3944,18 @@ namespace OpenVikings.NXBasics
                         }
                     }
 
-                    int sub = 0;
-                    if (-1 < err) sub = twiceAbsDy;
-
-                    int addX = 0;
-                    if (-1 < err) addX = stepX;
+                    int sub = (-1 < err) ? twiceAbsDy : 0;
+                    int addX = (-1 < err) ? stepX : 0;
 
                     x0 += addX;
                     y0 += stepY;
+
                     err = (err + twiceAbsDx) - sub;
                 }
             }
             else
             {
-                int err = twiceAbsDy - (int)absDx;
+                int err = twiceAbsDy - absDx;
 
                 while (true)
                 {
@@ -4451,9 +3964,9 @@ namespace OpenVikings.NXBasics
                         Draw_SetPixel(x0, y0, index);
                     }
 
-                    if (x1 == x0)
+                    if (x0 == x1)
                     {
-                        break;
+                        return;
                     }
 
                     if (period != 0)
@@ -4466,14 +3979,12 @@ namespace OpenVikings.NXBasics
                         }
                     }
 
-                    int sub = 0;
-                    if (-1 < err) sub = twiceAbsDx;
-
-                    int addY = 0;
-                    if (-1 < err) addY = stepY;
+                    int sub = (-1 < err) ? twiceAbsDx : 0;
+                    int addY = (-1 < err) ? stepY : 0;
 
                     y0 += addY;
                     x0 += stepX;
+
                     err = (err + twiceAbsDy) - sub;
                 }
             }
@@ -4482,43 +3993,35 @@ namespace OpenVikings.NXBasics
         // NXBasics::CBitmap::Draw_StippledLine(int, int, int, int, unsigned short, unsigned int) const
         internal void Draw_StippledLine(int x0, int y0, int x1, int y1, ushort value, uint period)
         {
+            if (_bpp != 0x10)
+            {
+                return;
+            }
+
             if (!TryGetPixelBuffer(out _, out _, out _, out _))
             {
                 return;
             }
 
-            if (!((-1 < x0) || (-1 < x1)) || !((-1 < y0) || (-1 < y1)))
+            if (!IsLinePossiblyVisible(x0, y0, x1, y1))
             {
                 return;
             }
-
-            int clipRight = _rect.X + _rect.Width - 1;
-            int clipBottom = _rect.Y + _rect.Height - 1;
-
-            if (!((x0 <= clipRight) || (x1 <= clipRight)) || !((y0 <= clipBottom) || (y1 <= clipBottom)))
-            {
-                return;
-            }
-
-            int dy = y1 - y0;
-            int stepY = (dy != 0) ? ((0 < dy) ? 1 : -1) : 0;
 
             int dx = x1 - x0;
-            int stepX = (dx != 0) ? ((0 < dx) ? 1 : -1) : 0;
+            int dy = y1 - y0;
 
-            int absDx = (dx < 0) ? -dx : dx;
-            int absDy = (dy < 0) ? -dy : dy;
+            int stepX = dx != 0 ? (dx > 0 ? 1 : -1) : 0;
+            int stepY = dy != 0 ? (dy > 0 ? 1 : -1) : 0;
+
+            int absDx = dx < 0 ? -dx : dx;
+            int absDy = dy < 0 ? -dy : dy;
 
             int twiceAbsDx = absDx * 2;
             int twiceAbsDy = absDy * 2;
 
             uint counter = 0;
             bool skip = false;
-
-            if (period == 0)
-            {
-                skip = false;
-            }
 
             if (absDx < absDy)
             {
@@ -4528,15 +4031,15 @@ namespace OpenVikings.NXBasics
                 {
                     if (!skip)
                     {
-                        if ((_rect.X <= x0) && (x0 <= clipRight) && (_rect.Y <= y0) && (y0 <= clipBottom) && (_bpp == 0x10))
+                        if (IsInsideRect(x0, y0))
                         {
                             Draw_SetPixel(x0, y0, value);
                         }
                     }
 
-                    if (y1 == y0)
+                    if (y0 == y1)
                     {
-                        break;
+                        return;
                     }
 
                     if (period != 0)
@@ -4549,37 +4052,32 @@ namespace OpenVikings.NXBasics
                         }
                     }
 
-                    int sub = 0;
-                    if (-1 < err) sub = twiceAbsDy;
-
-                    int addX = 0;
-                    if (-1 < err) addX = stepX;
+                    int sub = (-1 < err) ? twiceAbsDy : 0;
+                    int addX = (-1 < err) ? stepX : 0;
 
                     x0 += addX;
                     y0 += stepY;
+
                     err = (err + twiceAbsDx) - sub;
                 }
-
-                return;
             }
             else
             {
                 int err = twiceAbsDy - absDx;
-                long x = x0;
 
                 while (true)
                 {
                     if (!skip)
                     {
-                        if ((_rect.X <= x) && (x <= clipRight) && (_rect.Y <= y0) && (y0 <= clipBottom) && (_bpp == 0x10))
+                        if (IsInsideRect(x0, y0))
                         {
-                            Draw_SetPixel((int)x, y0, value);
+                            Draw_SetPixel(x0, y0, value);
                         }
                     }
 
-                    if (x1 == x)
+                    if (x0 == x1)
                     {
-                        break;
+                        return;
                     }
 
                     if (period != 0)
@@ -4592,14 +4090,12 @@ namespace OpenVikings.NXBasics
                         }
                     }
 
-                    int sub = 0;
-                    if (-1 < err) sub = twiceAbsDx;
-
-                    int addY = 0;
-                    if (-1 < err) addY = stepY;
+                    int sub = (-1 < err) ? twiceAbsDx : 0;
+                    int addY = (-1 < err) ? stepY : 0;
 
                     y0 += addY;
-                    x += stepX;
+                    x0 += stepX;
+
                     err = (err + twiceAbsDy) - sub;
                 }
             }
@@ -4608,43 +4104,35 @@ namespace OpenVikings.NXBasics
         // NXBasics::CBitmap::Draw_StippledLine(int, int, int, int, unsigned int, unsigned int) const
         internal void Draw_StippledLine(int x0, int y0, int x1, int y1, uint value, uint period)
         {
+            if (_bpp != 0x20)
+            {
+                return;
+            }
+
             if (!TryGetPixelBuffer(out _, out _, out _, out _))
             {
                 return;
             }
 
-            if (!((-1 < x0) || (-1 < x1)) || !((-1 < y0) || (-1 < y1)))
+            if (!IsLinePossiblyVisible(x0, y0, x1, y1))
             {
                 return;
             }
-
-            int clipRight = _rect.X + _rect.Width - 1;
-            int clipBottom = _rect.Y + _rect.Height - 1;
-
-            if (!((x0 <= clipRight) || (x1 <= clipRight)) || !((y0 <= clipBottom) || (y1 <= clipBottom)))
-            {
-                return;
-            }
-
-            int dy = y1 - y0;
-            int stepY = (dy != 0) ? ((0 < dy) ? 1 : -1) : 0;
 
             int dx = x1 - x0;
-            int stepX = (dx != 0) ? ((0 < dx) ? 1 : -1) : 0;
+            int dy = y1 - y0;
 
-            int absDx = (dx < 0) ? -dx : dx;
-            int absDy = (dy < 0) ? -dy : dy;
+            int stepX = dx != 0 ? (dx > 0 ? 1 : -1) : 0;
+            int stepY = dy != 0 ? (dy > 0 ? 1 : -1) : 0;
+
+            int absDx = dx < 0 ? -dx : dx;
+            int absDy = dy < 0 ? -dy : dy;
 
             int twiceAbsDx = absDx * 2;
             int twiceAbsDy = absDy * 2;
 
             uint counter = 0;
             bool skip = false;
-
-            if (period == 0)
-            {
-                skip = false;
-            }
 
             if (absDx < absDy)
             {
@@ -4654,15 +4142,15 @@ namespace OpenVikings.NXBasics
                 {
                     if (!skip)
                     {
-                        if ((_rect.X <= x0) && (x0 <= clipRight) && (_rect.Y <= y0) && (y0 <= clipBottom) && (_bpp == 0x20))
+                        if (IsInsideRect(x0, y0))
                         {
                             Draw_SetPixel(x0, y0, value);
                         }
                     }
 
-                    if (y1 == y0)
+                    if (y0 == y1)
                     {
-                        break;
+                        return;
                     }
 
                     if (period != 0)
@@ -4675,37 +4163,32 @@ namespace OpenVikings.NXBasics
                         }
                     }
 
-                    int sub = 0;
-                    if (-1 < err) sub = twiceAbsDy;
-
-                    int addX = 0;
-                    if (-1 < err) addX = stepX;
+                    int sub = (-1 < err) ? twiceAbsDy : 0;
+                    int addX = (-1 < err) ? stepX : 0;
 
                     x0 += addX;
                     y0 += stepY;
+
                     err = (err + twiceAbsDx) - sub;
                 }
-
-                return;
             }
             else
             {
                 int err = twiceAbsDy - absDx;
-                long x = x0;
 
                 while (true)
                 {
                     if (!skip)
                     {
-                        if ((_rect.X <= x) && (x <= clipRight) && (_rect.Y <= y0) && (y0 <= clipBottom) && (_bpp == 0x20))
+                        if (IsInsideRect(x0, y0))
                         {
-                            Draw_SetPixel((int)x, y0, value);
+                            Draw_SetPixel(x0, y0, value);
                         }
                     }
 
-                    if (x1 == x)
+                    if (x0 == x1)
                     {
-                        break;
+                        return;
                     }
 
                     if (period != 0)
@@ -4718,14 +4201,12 @@ namespace OpenVikings.NXBasics
                         }
                     }
 
-                    int sub = 0;
-                    if (-1 < err) sub = twiceAbsDx;
-
-                    int addY = 0;
-                    if (-1 < err) addY = stepY;
+                    int sub = (-1 < err) ? twiceAbsDx : 0;
+                    int addY = (-1 < err) ? stepY : 0;
 
                     y0 += addY;
-                    x += stepX;
+                    x0 += stepX;
+
                     err = (err + twiceAbsDy) - sub;
                 }
             }
@@ -4736,22 +4217,39 @@ namespace OpenVikings.NXBasics
         {
             if (_bpp == 0x20)
             {
-                uint v = CXBSystemManager.sTrueColorCreatorPtr.GetTrueColorWord(in color);
+                CTrueColorCreator? creator = CXBSystemManager.sTrueColorCreatorPtr;
+                if (creator == null || !creator.IsEnabled)
+                {
+                    return;
+                }
+
+                uint v = creator.GetTrueColorWord(in color);
                 Draw_StippledLine(x0, y0, x1, y1, v, period);
                 return;
             }
 
             if (_bpp == 0x10)
             {
-                ushort v = CXBSystemManager.sHighColorCreatorPtr.GetHighColorWord(color.R, color.G, color.B);
+                CHighColorCreator? creator = CXBSystemManager.sHighColorCreatorPtr;
+                if (creator == null || !creator.IsEnabled)
+                {
+                    return;
+                }
+
+                ushort v = creator.GetHighColorWord(color.R, color.G, color.B);
                 Draw_StippledLine(x0, y0, x1, y1, v, period);
                 return;
             }
 
             if (_bpp == 0x08)
             {
-                CPalette palette = _palette ?? CXBSystemManager.sPalettePtr;
-                byte idx = palette.FindMatchingColor(color);
+                CPalette? palette = _palette ?? CXBSystemManager.sPalettePtr;
+                if (palette == null)
+                {
+                    return;
+                }
+
+                byte idx = palette.FindMatchingColor(color.R, color.G, color.B);
                 Draw_StippledLine(x0, y0, x1, y1, idx, period);
             }
         }
@@ -4772,10 +4270,6 @@ namespace OpenVikings.NXBasics
             }
 
             int r = (int)radius;
-            if (r < 0)
-            {
-                return;
-            }
 
             int d = 3 - (2 * r);
             int x = 0;
@@ -4810,6 +4304,11 @@ namespace OpenVikings.NXBasics
         // NXBasics::CBitmap::Draw_Circle(int, int, unsigned int, unsigned short) const
         internal void Draw_Circle(int cx, int cy, uint radius, ushort value)
         {
+            if (_bpp != 0x10)
+            {
+                return;
+            }
+
             if (!TryGetPixelBuffer(out _, out _, out _, out _))
             {
                 return;
@@ -4821,10 +4320,6 @@ namespace OpenVikings.NXBasics
             }
 
             int r = (int)radius;
-            if (r < 0)
-            {
-                return;
-            }
 
             int d = 3 - (2 * r);
             int x = 0;
@@ -4859,6 +4354,11 @@ namespace OpenVikings.NXBasics
         // NXBasics::CBitmap::Draw_Circle(int, int, unsigned int, unsigned int) const
         internal void Draw_Circle(int cx, int cy, uint radius, uint value)
         {
+            if (_bpp != 0x20)
+            {
+                return;
+            }
+
             if (!TryGetPixelBuffer(out _, out _, out _, out _))
             {
                 return;
@@ -4870,10 +4370,6 @@ namespace OpenVikings.NXBasics
             }
 
             int r = (int)radius;
-            if (r < 0)
-            {
-                return;
-            }
 
             int d = 3 - (2 * r);
             int x = 0;
@@ -4910,22 +4406,39 @@ namespace OpenVikings.NXBasics
         {
             if (_bpp == 0x20)
             {
-                uint v = CXBSystemManager.sTrueColorCreatorPtr.GetTrueColorWord(in color);
+                CTrueColorCreator? creator = CXBSystemManager.sTrueColorCreatorPtr;
+                if (creator == null || !creator.IsEnabled)
+                {
+                    return;
+                }
+
+                uint v = creator.GetTrueColorWord(in color);
                 Draw_Circle(cx, cy, radius, v);
                 return;
             }
 
             if (_bpp == 0x10)
             {
-                ushort v = CXBSystemManager.sHighColorCreatorPtr.GetHighColorWord(color.R, color.G, color.B);
+                CHighColorCreator? creator = CXBSystemManager.sHighColorCreatorPtr;
+                if (creator == null || !creator.IsEnabled)
+                {
+                    return;
+                }
+
+                ushort v = creator.GetHighColorWord(color.R, color.G, color.B);
                 Draw_Circle(cx, cy, radius, v);
                 return;
             }
 
             if (_bpp == 0x08)
             {
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
-                byte idx = pal.FindMatchingColor(color);
+                CPalette? pal = _palette ?? CXBSystemManager.sPalettePtr;
+                if (pal == null)
+                {
+                    return;
+                }
+
+                byte idx = pal.FindMatchingColor(color.R, color.G, color.B);
                 Draw_Circle(cx, cy, radius, idx);
             }
         }
@@ -4944,10 +4457,6 @@ namespace OpenVikings.NXBasics
             }
 
             int r = (int)radius;
-            if (r < 0)
-            {
-                return;
-            }
 
             int d = 3 - (2 * r);
             int x = 0;
@@ -4955,7 +4464,6 @@ namespace OpenVikings.NXBasics
 
             while (x <= y)
             {
-                // Horizontal spans for the two Y-levels for current x/y
                 SRectangle span;
 
                 span = new SRectangle(cx - x, cy + y, x * 2 + 1, 1);
@@ -4987,6 +4495,11 @@ namespace OpenVikings.NXBasics
         // NXBasics::CBitmap::Draw_FilledCircle(int, int, unsigned int, unsigned short) const
         internal void Draw_FilledCircle(int cx, int cy, uint radius, ushort value)
         {
+            if (_bpp != 0x10)
+            {
+                return;
+            }
+
             if (!TryGetPixelBuffer(out _, out _, out _, out _))
             {
                 return;
@@ -4998,10 +4511,6 @@ namespace OpenVikings.NXBasics
             }
 
             int r = (int)radius;
-            if (r < 0)
-            {
-                return;
-            }
 
             int d = 3 - (2 * r);
             int x = 0;
@@ -5032,6 +4541,11 @@ namespace OpenVikings.NXBasics
         // NXBasics::CBitmap::Draw_FilledCircle(int, int, unsigned int, unsigned int) const
         internal void Draw_FilledCircle(int cx, int cy, uint radius, uint value)
         {
+            if (_bpp != 0x20)
+            {
+                return;
+            }
+
             if (!TryGetPixelBuffer(out _, out _, out _, out _))
             {
                 return;
@@ -5043,10 +4557,6 @@ namespace OpenVikings.NXBasics
             }
 
             int r = (int)radius;
-            if (r < 0)
-            {
-                return;
-            }
 
             int d = 3 - (2 * r);
             int x = 0;
@@ -5079,28 +4589,46 @@ namespace OpenVikings.NXBasics
         {
             if (_bpp == 0x20)
             {
-                uint v = CXBSystemManager.sTrueColorCreatorPtr.GetTrueColorWord(in color);
+                CTrueColorCreator? creator = CXBSystemManager.sTrueColorCreatorPtr;
+                if (creator == null || !creator.IsEnabled)
+                {
+                    return;
+                }
+
+                uint v = creator.GetTrueColorWord(in color);
                 Draw_FilledCircle(cx, cy, radius, v);
                 return;
             }
 
             if (_bpp == 0x10)
             {
-                ushort v = CXBSystemManager.sHighColorCreatorPtr.GetHighColorWord(color.R, color.G, color.B);
+                CHighColorCreator? creator = CXBSystemManager.sHighColorCreatorPtr;
+                if (creator == null || !creator.IsEnabled)
+                {
+                    return;
+                }
+
+                ushort v = creator.GetHighColorWord(color.R, color.G, color.B);
                 Draw_FilledCircle(cx, cy, radius, v);
                 return;
             }
 
             if (_bpp == 0x08)
             {
-                CPalette pal = _palette ?? CXBSystemManager.sPalettePtr;
-                byte idx = pal.FindMatchingColor(color);
+                CPalette? pal = _palette ?? CXBSystemManager.sPalettePtr;
+                if (pal == null)
+                {
+                    return;
+                }
+
+                byte idx = pal.FindMatchingColor(color.R, color.G, color.B);
                 Draw_FilledCircle(cx, cy, radius, idx);
             }
         }
         #endregion
 
         #region NXBasics::CBitmap::Text_Print()
+
         // NXBasics::CBitmap::Text_Print(NXBasics::CFont const*, int, int, char const*) const
         internal void Text_Print(CFont font, int x, int y, string text)
         {
@@ -5109,7 +4637,7 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            Text_PrintCore(font, x, y, text, static (f, bmp, ch, cx, cy) => f.PrintCharacter(bmp, (byte)ch, cx, cy));
+            Text_PrintCore(font, x, y, text, static (f, bmp, ascii, cx, cy) => f.PrintCharacter(bmp, ascii, cx, cy));
         }
 
         // NXBasics::CBitmap::Text_PrintV(NXBasics::CFont const*, int, int, char const*, ...) const
@@ -5132,7 +4660,7 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            Text_PrintCore(font, x, y, text, (f, bmp, ch, cx, cy) => f.PrintCharacter(palette, bmp, (byte)ch, cx, cy));
+            Text_PrintCore(font, x, y, text, (f, bmp, ascii, cx, cy) => f.PrintCharacter(palette, bmp, ascii, cx, cy));
         }
 
         // NXBasics::CBitmap::Text_PrintV(NXBasics::CFont const&, NXBasics::CPalette&, int, int, char const*, ...) const
@@ -5156,7 +4684,7 @@ namespace OpenVikings.NXBasics
             }
 
             SColorRGB colorCopy = color;
-            Text_PrintCore(font, x, y, text, (f, bmp, ch, cx, cy) => f.PrintCharacter(colorCopy, bmp, (byte)ch, cx, cy));
+            Text_PrintCore(font, x, y, text, (f, bmp, ascii, cx, cy) => f.PrintCharacter(colorCopy, bmp, ascii, cx, cy));
         }
 
         // NXBasics::CBitmap::Text_PrintV(NXBasics::CFont const&, NXBasics::SColorRGB const&, int, int, char const*, ...) const
@@ -5173,7 +4701,7 @@ namespace OpenVikings.NXBasics
 
         // -------- shared core --------
 
-        private delegate void PrintCharDelegate(CFont font, CBitmap bmp, char ch, int cx, int cy);
+        private delegate void PrintCharDelegate(CFont font, CBitmap bmp, byte ascii, int cx, int cy);
 
         private void Text_PrintCore(CFont font, int x, int y, string text, PrintCharDelegate printer)
         {
@@ -5209,7 +4737,7 @@ namespace OpenVikings.NXBasics
                         i = ((i + 1) < text.Length && text[i + 1] == '\r') ? (i + 2) : (i + 1);
                     }
 
-                    cursorY += font.GetPixelHeight("i") + 2;
+                    cursorY += font.GetCharacterHeight((byte)'i') + 2;
                     cursorX = x;
                     continue;
                 }
@@ -5222,13 +4750,13 @@ namespace OpenVikings.NXBasics
 
                     if (_fixedXDistance == 0)
                     {
-                        printer(font, this, ch, cursorX, cursorY);
+                        printer(font, this, ascii, cursorX, cursorY);
                         cursorX += charWidth;
                     }
                     else
                     {
                         int centeredX = cursorX + ((_fixedXDistance - charWidth) / 2);
-                        printer(font, this, ch, centeredX, cursorY);
+                        printer(font, this, ascii, centeredX, cursorY);
                         cursorX += _fixedXDistance;
                     }
                 }
@@ -5247,7 +4775,7 @@ namespace OpenVikings.NXBasics
             return (byte)'?';
         }
 
-        // -------- printf-style formatting (replaces fake DexterString.VSPrintf) --------
+        // -------- printf-style formatting --------
 
         private static string PrintfFormat(string format, object[] args)
         {
@@ -5261,7 +4789,7 @@ namespace OpenVikings.NXBasics
                 return ReplaceDoublePercent(format);
             }
 
-            System.Text.StringBuilder sb = new System.Text.StringBuilder(format.Length + 32);
+            System.Text.StringBuilder sb = new(format.Length + 32);
             int argIndex = 0;
 
             for (int i = 0; i < format.Length; i++)
@@ -5492,7 +5020,6 @@ namespace OpenVikings.NXBasics
 
             return format.Replace("%%", "%", StringComparison.Ordinal);
         }
-
         #endregion
 
         #region NXBasics::CBitmap::Text_GetPixelWidth() Text_SetFixedXDistance()
@@ -5504,79 +5031,42 @@ namespace OpenVikings.NXBasics
                 return 0;
             }
 
-            int cursorX = 0;
-            int maxX = 0;
+            int zeroIndex = text.IndexOf('\0');
+            int effectiveLength = zeroIndex >= 0 ? zeroIndex : text.Length;
 
-            int i = 0;
-            while (i < text.Length)
+            if (_fixedXDistance == 0)
             {
-                char ch = text[i];
+                // Matches: CFont::GetPixelWidth(font, param_2)
+                // If text contains '\0', only the prefix is relevant.
+                string effectiveText = effectiveLength == text.Length ? text : text[..effectiveLength];
+                int width = font.GetPixelWidth(effectiveText);
 
-                if (ch == '\0')
+                if (width <= 0)
                 {
-                    break;
+                    return 0;
                 }
 
-                if (ch == '\t' || ch == ' ' || ch == '_')
-                {
-                    int advance = _fixedXDistance != 0 ? _fixedXDistance : font.GetCharacterWidth((byte)'i');
-                    cursorX += advance;
-
-                    if (cursorX > maxX)
-                    {
-                        maxX = cursorX;
-                    }
-
-                    i++;
-                    continue;
-                }
-
-                if (ch == '\n' || ch == '\r')
-                {
-                    if (cursorX > maxX)
-                    {
-                        maxX = cursorX;
-                    }
-
-                    cursorX = 0;
-
-                    if (ch == '\r')
-                    {
-                        i = ((i + 1) < text.Length && text[i + 1] == '\n') ? (i + 2) : (i + 1);
-                    }
-                    else
-                    {
-                        i = ((i + 1) < text.Length && text[i + 1] == '\r') ? (i + 2) : (i + 1);
-                    }
-
-                    continue;
-                }
-
-                if (ch > (char)0x1F)
-                {
-                    int advance = _fixedXDistance != 0 ? _fixedXDistance : font.GetCharacterWidth((byte)ch);
-                    cursorX += advance;
-
-                    if (cursorX > maxX)
-                    {
-                        maxX = cursorX;
-                    }
-                }
-
-                i++;
+                return (uint)width;
             }
 
-            if (cursorX > maxX)
-            {
-                maxX = cursorX;
-            }
-
-            if (maxX < 0)
+            if (_fixedXDistance <= 0 || effectiveLength <= 0)
             {
                 return 0;
             }
 
-            return (uint)maxX;
+            long product = effectiveLength * _fixedXDistance;
+            if (product <= 0)
+            {
+                return 0;
+            }
+
+            // The original returns ulong but effectively uses a 32-bit product; clamp for safety in managed code.
+            if (product > uint.MaxValue)
+            {
+                return uint.MaxValue;
+            }
+
+            return (uint)product;
         }
 
         // NXBasics::CBitmap::Text_SetFixedXDistance(int)
@@ -5609,6 +5099,18 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
+            if (!TryGetPixelBuffer(out byte[]? buffer, out int baseOffset, out int pitchPixels, out int bytesPerPixel))
+            {
+                return;
+            }
+
+            if (buffer == null || bytesPerPixel <= 0)
+            {
+                return;
+            }
+
+            int pitch = pitchPixels > 0 ? pitchPixels : width;
+
             int halfWidth = width / 2;
             int halfHeight = height / 2;
 
@@ -5617,66 +5119,58 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffset, out int pitchPixels, out int bytesPerPixel))
+            // Matches dump behavior: only uses a 2*halfHeight area (odd last row/col is effectively ignored).
+            int effectiveWidth = halfWidth * 2;
+            int effectiveHeight = halfHeight * 2;
+
+            if (effectiveWidth <= 1 || effectiveHeight <= 1)
             {
                 return;
             }
 
-            int pitch = pitchPixels > 0 ? pitchPixels : width;
-
-            // Snapshot the full plane (including pitch padding), so writes don't affect subsequent reads.
-            int srcRowBytes = checked(pitch * bytesPerPixel);
-            int srcSizeBytes = checked(srcRowBytes * height);
-
-            byte[] src = new byte[srcSizeBytes];
-
-            for (int y = 0; y < height; y++)
-            {
-                int srcDst = y * srcRowBytes;
-                int srcSrc = checked(baseOffset + (y * srcRowBytes));
-                Buffer.BlockCopy(buffer, srcSrc, src, srcDst, srcRowBytes);
-            }
-
             int topY = 0;
-            int bottomY = (halfHeight * 2) - 1;
-            int yDist = halfHeight;
+            int bottomY = effectiveHeight - 1;
 
+            int yDist = halfHeight;
             while (yDist > 1)
             {
                 int mappedY = (int)(((uint)yDist * factor) >> 8);
                 int srcTopY = halfHeight - mappedY;
                 int srcBottomY = (halfHeight + mappedY) - 1;
 
-                int leftX = 0;
-                int rightX = (halfWidth * 2) - 1;
-                int xDist = halfWidth;
+                if ((uint)srcTopY >= (uint)effectiveHeight || (uint)srcBottomY >= (uint)effectiveHeight)
+                {
+                    topY++;
+                    bottomY--;
+                    yDist--;
+                    continue;
+                }
 
                 uint xAcc = (uint)halfWidth * factor;
 
-                while (xDist > 1)
+                int leftX = 0;
+                int rightX = effectiveWidth - 1;
+
+                int xCount = halfWidth;
+                while (xCount > 1)
                 {
                     int mappedX = (int)(xAcc >> 8);
+
                     int srcLeftX = halfWidth - mappedX;
                     int srcRightX = (halfWidth + mappedX) - 1;
 
-                    int dstTL = checked(baseOffset + (((topY * pitch) + leftX) * bytesPerPixel));
-                    int dstTR = checked(baseOffset + (((topY * pitch) + rightX) * bytesPerPixel));
-                    int dstBL = checked(baseOffset + (((bottomY * pitch) + leftX) * bytesPerPixel));
-                    int dstBR = checked(baseOffset + (((bottomY * pitch) + rightX) * bytesPerPixel));
-
-                    int srcTL = checked(((srcTopY * pitch) + srcLeftX) * bytesPerPixel);
-                    int srcTR = checked(((srcTopY * pitch) + srcRightX) * bytesPerPixel);
-                    int srcBL = checked(((srcBottomY * pitch) + srcLeftX) * bytesPerPixel);
-                    int srcBR = checked(((srcBottomY * pitch) + srcRightX) * bytesPerPixel);
-
-                    Buffer.BlockCopy(src, srcTL, buffer, dstTL, bytesPerPixel);
-                    Buffer.BlockCopy(src, srcTR, buffer, dstTR, bytesPerPixel);
-                    Buffer.BlockCopy(src, srcBL, buffer, dstBL, bytesPerPixel);
-                    Buffer.BlockCopy(src, srcBR, buffer, dstBR, bytesPerPixel);
+                    if ((uint)srcLeftX < (uint)effectiveWidth && (uint)srcRightX < (uint)effectiveWidth)
+                    {
+                        CopyPixel(buffer, baseOffset, pitch, bytesPerPixel, srcTopY, srcLeftX, topY, leftX);
+                        CopyPixel(buffer, baseOffset, pitch, bytesPerPixel, srcTopY, srcRightX, topY, rightX);
+                        CopyPixel(buffer, baseOffset, pitch, bytesPerPixel, srcBottomY, srcLeftX, bottomY, leftX);
+                        CopyPixel(buffer, baseOffset, pitch, bytesPerPixel, srcBottomY, srcRightX, bottomY, rightX);
+                    }
 
                     leftX++;
                     rightX--;
-                    xDist--;
+                    xCount--;
+
                     xAcc -= factor;
                 }
 
@@ -5684,6 +5178,15 @@ namespace OpenVikings.NXBasics
                 bottomY--;
                 yDist--;
             }
+        }
+
+        private static void CopyPixel(byte[] buffer, int baseOffset, int pitchPixels, int bytesPerPixel, int srcY, int srcX, int dstY, int dstX)
+        {
+            int srcIndex = checked(baseOffset + ((srcY * pitchPixels) + srcX) * bytesPerPixel);
+            int dstIndex = checked(baseOffset + ((dstY * pitchPixels) + dstX) * bytesPerPixel);
+
+            // Copy exactly one pixel (1/2/4 bytes)
+            Buffer.BlockCopy(buffer, srcIndex, buffer, dstIndex, bytesPerPixel);
         }
         #endregion
 
@@ -5698,11 +5201,6 @@ namespace OpenVikings.NXBasics
                 return false;
             }
 
-            if (_pixels8 == null)
-            {
-                return false;
-            }
-
             int width = _rect.Width;
             int height = _rect.Height;
 
@@ -5711,11 +5209,17 @@ namespace OpenVikings.NXBasics
                 return false;
             }
 
-            int stride = StridePixels;
-            if (stride <= 0)
+            if (!TryGetPixelBuffer(out byte[]? buffer, out int baseOffset, out int pitchPixels, out int bytesPerPixel))
             {
-                stride = width;
+                return false;
             }
+
+            if (buffer == null || bytesPerPixel != 1)
+            {
+                return false;
+            }
+
+            int stride = pitchPixels > 0 ? pitchPixels : width;
 
             int minX = 2000;
             int minY = 2000;
@@ -5726,11 +5230,11 @@ namespace OpenVikings.NXBasics
 
             for (int y = 0; y < height; y++)
             {
-                int rowBase = y * stride;
+                int rowBase = checked(baseOffset + (y * stride));
 
                 for (int x = 0; x < width; x++)
                 {
-                    byte value = _pixels8[rowBase + x];
+                    byte value = buffer[rowBase + x];
                     if (value == transparentIndex)
                     {
                         continue;
@@ -5759,44 +5263,48 @@ namespace OpenVikings.NXBasics
         // NXBasics::CBitmap::Remap(NXBasics::CRemapTable const&, NXBasics::SRectangle) const
         internal void Remap(CRemapTable remapTable, SRectangle rect)
         {
+            if (!rect.IsTouching(in _rect))
+            {
+                return;
+            }
+
+            rect.CutInside(in _rect);
+            if (rect.Width <= 0 || rect.Height <= 0)
+            {
+                return;
+            }
+
+            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffset, out int pitchPixels, out int bytesPerPixel))
+            {
+                return;
+            }
+
+            if (buffer == null || bytesPerPixel <= 0)
+            {
+                return;
+            }
+
+            int pitch = pitchPixels > 0 ? pitchPixels : _rect.Width;
+
             if (_bpp == 0x20)
             {
-                if (_pixels32 == null)
-                {
-                    return;
-                }
-
-                if (!rect.IsTouching(in _rect))
-                {
-                    return;
-                }
-
-                rect.CutInside(in _rect);
-
-                if (rect.Width <= 0 || rect.Height <= 0)
-                {
-                    return;
-                }
-
-                int stride = StridePixels;
-                if (stride <= 0)
-                {
-                    stride = _rect.Width;
-                }
+                // Matches dump: *(uint*) = (*(uint*) >> 1) & 0x7f7f7f
+                uint mask = 0x007F7F7FU;
 
                 int yEndExclusive = rect.Y + rect.Height;
                 int xEndExclusive = rect.X + rect.Width;
 
                 for (int y = rect.Y; y < yEndExclusive; y++)
                 {
-                    int rowBase = y * stride;
+                    int rowBaseBytes = checked(baseOffset + (y * pitch + rect.X) * bytesPerPixel);
 
                     for (int x = rect.X; x < xEndExclusive; x++)
                     {
-                        int i = rowBase + x;
-                        uint value = _pixels32[i];
-                        value = (value >> 1) & 0x007F7F7FU;
-                        _pixels32[i] = value;
+                        int pixelOffset = checked(rowBaseBytes + (x - rect.X) * bytesPerPixel);
+
+                        uint value = ReadUInt32LittleEndian(buffer, pixelOffset);
+                        value = (value >> 1) & mask;
+                        WriteUInt32LittleEndian(buffer, pixelOffset, value);
                     }
                 }
 
@@ -5805,23 +5313,6 @@ namespace OpenVikings.NXBasics
 
             if (_bpp == 0x10)
             {
-                if (_pixels16 == null)
-                {
-                    return;
-                }
-
-                if (!rect.IsTouching(in _rect))
-                {
-                    return;
-                }
-
-                rect.CutInside(in _rect);
-
-                if (rect.Width <= 0 || rect.Height <= 0)
-                {
-                    return;
-                }
-
                 CHighColorCreator creator = CXBSystemManager.sHighColorCreatorPtr;
                 if (creator == null)
                 {
@@ -5830,25 +5321,20 @@ namespace OpenVikings.NXBasics
 
                 ushort mask = creator.GetHighColorWord(0x7F, 0x7F, 0x7F);
 
-                int stride = StridePixels;
-                if (stride <= 0)
-                {
-                    stride = _rect.Width;
-                }
-
                 int yEndExclusive = rect.Y + rect.Height;
                 int xEndExclusive = rect.X + rect.Width;
 
                 for (int y = rect.Y; y < yEndExclusive; y++)
                 {
-                    int rowBase = y * stride;
+                    int rowBaseBytes = checked(baseOffset + (y * pitch + rect.X) * bytesPerPixel);
 
                     for (int x = rect.X; x < xEndExclusive; x++)
                     {
-                        int i = rowBase + x;
-                        ushort value = _pixels16[i];
+                        int pixelOffset = checked(rowBaseBytes + (x - rect.X) * bytesPerPixel);
+
+                        ushort value = ReadUInt16LittleEndian(buffer, pixelOffset);
                         value = (ushort)(((uint)value >> 1) & mask);
-                        _pixels16[i] = value;
+                        WriteUInt16LittleEndian(buffer, pixelOffset, value);
                     }
                 }
 
@@ -5857,11 +5343,6 @@ namespace OpenVikings.NXBasics
 
             if (_bpp == 0x08)
             {
-                if (_pixels8 == null)
-                {
-                    return;
-                }
-
                 if (remapTable == null)
                 {
                     return;
@@ -5873,35 +5354,17 @@ namespace OpenVikings.NXBasics
                     return;
                 }
 
-                if (!rect.IsTouching(in _rect))
-                {
-                    return;
-                }
-
-                rect.CutInside(in _rect);
-
-                if (rect.Width <= 0 || rect.Height <= 0)
-                {
-                    return;
-                }
-
-                int stride = StridePixels;
-                if (stride <= 0)
-                {
-                    stride = _rect.Width;
-                }
-
                 int yEndExclusive = rect.Y + rect.Height;
                 int xEndExclusive = rect.X + rect.Width;
 
                 for (int y = rect.Y; y < yEndExclusive; y++)
                 {
-                    int rowBase = y * stride;
+                    int rowBase = checked(baseOffset + (y * pitch) + rect.X);
 
                     for (int x = rect.X; x < xEndExclusive; x++)
                     {
-                        int i = rowBase + x;
-                        _pixels8[i] = table[_pixels8[i]];
+                        int i = rowBase + (x - rect.X);
+                        buffer[i] = table[buffer[i]];
                     }
                 }
             }
@@ -5914,15 +5377,32 @@ namespace OpenVikings.NXBasics
             Remap(remapTable, rect);
         }
 
-        internal bool HasPixelBuffer()
+        private static ushort ReadUInt16LittleEndian(byte[] buffer, int offset)
         {
-            return _bpp switch
-            {
-                (byte)BitmapFormat.Indexed8 => _pixels8 != null,
-                (byte)BitmapFormat.HighColor16 => _pixels16 != null,
-                (byte)BitmapFormat.TrueColor32 => _pixels32 != null,
-                _ => false
-            };
+            return (ushort)(buffer[offset] | (buffer[offset + 1] << 8));
+        }
+
+        private static void WriteUInt16LittleEndian(byte[] buffer, int offset, ushort value)
+        {
+            buffer[offset] = (byte)(value & 0xFF);
+            buffer[offset + 1] = (byte)((value >> 8) & 0xFF);
+        }
+
+        private static uint ReadUInt32LittleEndian(byte[] buffer, int offset)
+        {
+            return (uint)(
+                buffer[offset] |
+                (buffer[offset + 1] << 8) |
+                (buffer[offset + 2] << 16) |
+                (buffer[offset + 3] << 24));
+        }
+
+        private static void WriteUInt32LittleEndian(byte[] buffer, int offset, uint value)
+        {
+            buffer[offset] = (byte)(value & 0xFF);
+            buffer[offset + 1] = (byte)((value >> 8) & 0xFF);
+            buffer[offset + 2] = (byte)((value >> 16) & 0xFF);
+            buffer[offset + 3] = (byte)((value >> 24) & 0xFF);
         }
         #endregion
 
@@ -5930,26 +5410,42 @@ namespace OpenVikings.NXBasics
         // NXBasics::CBitmap::FilterColor(unsigned char, unsigned char) const
         internal void FilterColor(byte fromColor, byte toColor)
         {
-            if (_bpp != (byte)BitmapFormat.Indexed8 || _pixels8 == null)
+            if (_bpp != (byte)BitmapFormat.Indexed8)
+            {
+                return;
+            }
+
+            if (!TryGetPixelBuffer(out byte[]? buffer, out int baseOffset, out int pitchPixels, out int bytesPerPixel))
+            {
+                return;
+            }
+
+            if (buffer == null || bytesPerPixel != 1)
             {
                 return;
             }
 
             int width = Width;
             int height = Height;
-            int stride = StridePixels;
+
+            if (width <= 0 || height <= 0)
+            {
+                return;
+            }
+
+            int stride = pitchPixels > 0 ? pitchPixels : width;
 
             for (int y = 0; y < height; y++)
             {
-                int rowBase = y * stride;
+                int rowBase = checked(baseOffset + (y * stride));
 
                 for (int x = 0; x < width; x++)
                 {
                     int i = rowBase + x;
 
-                    if (_pixels8[i] != fromColor)
+                    if (buffer[i] != fromColor)
                     {
-                        _pixels8[i] = toColor;
+                        buffer[i] = toColor;
                     }
                 }
             }
@@ -5958,26 +5454,42 @@ namespace OpenVikings.NXBasics
         // NXBasics::CBitmap::ReplaceColor(unsigned char, unsigned char) const
         internal void ReplaceColor(byte fromColor, byte toColor)
         {
-            if (_bpp != (byte)BitmapFormat.Indexed8 || _pixels8 == null)
+            if (_bpp != (byte)BitmapFormat.Indexed8)
+            {
+                return;
+            }
+
+            if (!TryGetPixelBuffer(out byte[]? buffer, out int baseOffset, out int pitchPixels, out int bytesPerPixel))
+            {
+                return;
+            }
+
+            if (buffer == null || bytesPerPixel != 1)
             {
                 return;
             }
 
             int width = Width;
             int height = Height;
-            int stride = StridePixels;
+
+            if (width <= 0 || height <= 0)
+            {
+                return;
+            }
+
+            int stride = pitchPixels > 0 ? pitchPixels : width;
 
             for (int y = 0; y < height; y++)
             {
-                int rowBase = y * stride;
+                int rowBase = checked(baseOffset + (y * stride));
 
                 for (int x = 0; x < width; x++)
                 {
                     int i = rowBase + x;
 
-                    if (_pixels8[i] == fromColor)
+                    if (buffer[i] == fromColor)
                     {
-                        _pixels8[i] = toColor;
+                        buffer[i] = toColor;
                     }
                 }
             }
@@ -5988,7 +5500,13 @@ namespace OpenVikings.NXBasics
         // NXBasics::CBitmap::GetUnclippedPixelPtr(int, int) const
         internal int GetUnclippedPixelIndex(int x, int y)
         {
-            return (y * StridePixels) + x;
+            int stride = StridePixels;
+            if (stride <= 0)
+            {
+                stride = Width;
+            }
+
+            return (y * stride) + x;
         }
 
         // NXBasics::CBitmap::Tool_UseSourceAsMaskAndDarken(NXBasics::CBitmap const&, int, int, unsigned char) const
@@ -5999,17 +5517,28 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
+            // Dump: source must be 8bpp and both bitmaps must have pixel pointers.
             if (_bpp != (byte)BitmapFormat.Indexed8)
             {
                 return;
             }
 
-            if (_pixels8 == null)
+            if (!TryGetPixelBuffer(out byte[] srcBuf, out int srcBase, out int srcPitchPixels, out int srcBytesPerPixel))
             {
                 return;
             }
 
-            if (!destination.HasPixelBuffer())
+            if (srcBuf == null || srcBytesPerPixel != 1)
+            {
+                return;
+            }
+
+            if (!destination.TryGetPixelBuffer(out byte[] dstBuf, out int dstBase, out int dstPitchPixels, out int dstBytesPerPixel))
+            {
+                return;
+            }
+
+            if (dstBuf == null || dstBytesPerPixel <= 0)
             {
                 return;
             }
@@ -6017,96 +5546,78 @@ namespace OpenVikings.NXBasics
             SRectangle dstBounds = destination._rect;
             SRectangle srcOverDst = new(offsetX, offsetY, Width, Height);
 
-            if (!srcOverDst.IsTouching(dstBounds))
+            if (!srcOverDst.IsTouching(in dstBounds))
             {
                 return;
             }
 
-            srcOverDst.CutInside(dstBounds);
+            srcOverDst.CutInside(in dstBounds);
 
             if (srcOverDst.Width <= 0 || srcOverDst.Height <= 0)
             {
                 return;
             }
 
+            int srcPitch = srcPitchPixels > 0 ? srcPitchPixels : Width;
+            int dstPitch = dstPitchPixels > 0 ? dstPitchPixels : destination.Width;
+
             int maskStartX = srcOverDst.X - offsetX;
             int maskStartY = srcOverDst.Y - offsetY;
 
-            int maskStride = StridePixels;
-            int dstStride = destination.StridePixels;
-
-            if (destination._bpp == (byte)BitmapFormat.TrueColor32)
+            if (dstBytesPerPixel == 4 && destination._bpp == (byte)BitmapFormat.TrueColor32)
             {
-                if (destination._pixels32 == null)
-                {
-                    return;
-                }
-
-                // Robust per-channel anti-bleed mask (better than hardcoding 0x007F7F7F).
-                CTrueColorCreator trueColorCreator = CXBSystemManager.sTrueColorCreatorPtr;
-
-                uint rMask = 0x00FF0000U;
-                uint gMask = 0x0000FF00U;
-                uint bMask = 0x000000FFU;
-
-                if (trueColorCreator != null && trueColorCreator.IsEnabled)
-                {
-                    rMask = trueColorCreator.RMask;
-                    gMask = trueColorCreator.GMask;
-                    bMask = trueColorCreator.BMask;
-                }
-
-                uint channelMask = ((rMask >> 1) & rMask) | ((gMask >> 1) & gMask) | ((bMask >> 1) & bMask);
+                // Dump uses constant 0x007F7F7F
+                const uint channelMask = 0x007F7F7FU;
 
                 for (int row = 0; row < srcOverDst.Height; row++)
                 {
-                    int maskRowBase = (maskStartY + row) * maskStride + maskStartX;
-                    int dstRowBase = (srcOverDst.Y + row) * dstStride + srcOverDst.X;
+                    int srcRowBase = checked(srcBase + ((maskStartY + row) * srcPitch) + maskStartX);
+                    int dstRowBaseBytes = checked(dstBase + (((srcOverDst.Y + row) * dstPitch) + srcOverDst.X) * 4);
 
                     for (int col = 0; col < srcOverDst.Width; col++)
                     {
-                        if (_pixels8[maskRowBase + col] != transparentMaskColor)
+                        if (srcBuf[srcRowBase + col] == transparentMaskColor)
                         {
-                            uint value = destination._pixels32[dstRowBase + col];
-                            destination._pixels32[dstRowBase + col] = (value >> 1) & channelMask;
+                            continue;
                         }
+
+                        int dstOff = checked(dstRowBaseBytes + (col * 4));
+                        uint value = ReadUInt32LittleEndian(dstBuf, dstOff);
+                        value = (value >> 1) & channelMask;
+                        WriteUInt32LittleEndian(dstBuf, dstOff, value);
                     }
                 }
 
                 return;
             }
 
-            if (destination._bpp == (byte)BitmapFormat.HighColor16)
+            if (dstBytesPerPixel == 2 && destination._bpp == (byte)BitmapFormat.HighColor16)
             {
-                if (destination._pixels16 == null)
-                {
-                    return;
-                }
-
-                // No interface: use the concrete creator used elsewhere in your codebase.
+                // Dump checks only pointer != null, not "IsEnabled"
                 CHighColorCreator highColorCreator = CXBSystemManager.sHighColorCreatorPtr;
-
-                if (highColorCreator == null || !highColorCreator.IsEnabled)
+                if (highColorCreator == null)
                 {
                     return;
                 }
 
-                // Keep original intent: build a per-format mask from (0x7F,0x7F,0x7F)
-                // so that (value >> 1) & mask does not bleed between channels in the packed format.
                 ushort mask = highColorCreator.GetHighColorWord(0x7F, 0x7F, 0x7F);
 
                 for (int row = 0; row < srcOverDst.Height; row++)
                 {
-                    int maskRowBase = (maskStartY + row) * maskStride + maskStartX;
-                    int dstRowBase = (srcOverDst.Y + row) * dstStride + srcOverDst.X;
+                    int srcRowBase = checked(srcBase + ((maskStartY + row) * srcPitch) + maskStartX);
+                    int dstRowBaseBytes = checked(dstBase + (((srcOverDst.Y + row) * dstPitch) + srcOverDst.X) * 2);
 
                     for (int col = 0; col < srcOverDst.Width; col++)
                     {
-                        if (_pixels8[maskRowBase + col] != transparentMaskColor)
+                        if (srcBuf[srcRowBase + col] == transparentMaskColor)
                         {
-                            ushort value = destination._pixels16[dstRowBase + col];
-                            destination._pixels16[dstRowBase + col] = (ushort)(((uint)value >> 1) & mask);
+                            continue;
                         }
+
+                        int dstOff = checked(dstRowBaseBytes + (col * 2));
+                        ushort value = ReadUInt16LittleEndian(dstBuf, dstOff);
+                        value = (ushort)(((uint)value >> 1) & mask);
+                        WriteUInt16LittleEndian(dstBuf, dstOff, value);
                     }
                 }
             }
@@ -6116,58 +5627,165 @@ namespace OpenVikings.NXBasics
         internal void Tool_Darken()
         {
             SRectangle rect = _rect;
-            Tool_Darken(ref rect);
+            Tool_Darken(rect);
         }
 
         // NXBasics::CBitmap::Tool_Darken(NXBasics::SRectangle) const
-        internal void Tool_Darken(ref SRectangle rect)
+        // NXBasics::CBitmap::Tool_Darken(NXBasics::SRectangle) const
+        internal void Tool_Darken(SRectangle rect)
         {
-            // Call the overload that derives correct behavior per bpp internally.
-            Tool_Darken(in rect, 0, 0, 0);
-        }
-
-        // NXBasics::CBitmap::Tool_Darken(NXBasics::SRectangle, unsigned char, unsigned char, unsigned char) const
-        internal void Tool_Darken(in SRectangle rect, uint rMask, uint gMask, uint bMask)
-        {
-            if (_bpp == (byte)BitmapFormat.TrueColor32)
+            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffset, out int pitchPixels, out int bytesPerPixel))
             {
-                if (_pixels32 == null)
-                {
-                    return;
-                }
+                return;
+            }
 
-                // Prefer masks from the true-color creator if available.
+            if (buffer == null || bytesPerPixel <= 0)
+            {
+                return;
+            }
+
+            rect.Validate();
+
+            if (!rect.IsTouching(in _rect))
+            {
+                return;
+            }
+
+            rect.CutInside(in _rect);
+
+            if (rect.Width <= 0 || rect.Height <= 0)
+            {
+                return;
+            }
+
+            if (_bpp == (byte)BitmapFormat.TrueColor32 && bytesPerPixel == 4)
+            {
+                // Dump: mask = GetTrueColorWord(..., 0x7f,0x7f,0x7f)
                 CTrueColorCreator trueColorCreator = CXBSystemManager.sTrueColorCreatorPtr;
+                uint mask = trueColorCreator != null ? trueColorCreator.GetTrueColorWord(0x7F, 0x7F, 0x7F) : 0x007F7F7FU;
 
-                uint rm = rMask;
-                uint gm = gMask;
-                uint bm = bMask;
-
-                if (trueColorCreator != null && trueColorCreator.IsEnabled)
-                {
-                    rm = trueColorCreator.RMask;
-                    gm = trueColorCreator.GMask;
-                    bm = trueColorCreator.BMask;
-                }
-
-                // Prevent cross-channel bit bleeding when shifting the whole pixel right by 1.
-                uint channelMask = ((rm >> 1) & rm) | ((gm >> 1) & gm) | ((bm >> 1) & bm);
-
-                int stride = StridePixels;
-                int startIndex = (rect.Y * stride) + rect.X;
+                int pitch = pitchPixels > 0 ? pitchPixels : Width;
 
                 for (int y = 0; y < rect.Height; y++)
                 {
-                    int rowIndex = startIndex + (y * stride);
+                    int rowBaseBytes = checked(baseOffset + (((rect.Y + y) * pitch) + rect.X) * 4);
 
                     for (int x = 0; x < rect.Width; x++)
                     {
-                        uint value = _pixels32[rowIndex + x];
-                        _pixels32[rowIndex + x] = (value >> 1) & channelMask;
+                        int off = checked(rowBaseBytes + (x * 4));
+                        uint value = ReadUInt32LittleEndian(buffer, off);
+                        value = (value >> 1) & mask;
+                        WriteUInt32LittleEndian(buffer, off, value);
                     }
                 }
 
                 return;
+            }
+
+            if (_bpp == (byte)BitmapFormat.HighColor16 && bytesPerPixel == 2)
+            {
+                CHighColorCreator highColorCreator = CXBSystemManager.sHighColorCreatorPtr;
+                if (highColorCreator == null)
+                {
+                    return;
+                }
+
+                ushort mask = highColorCreator.GetHighColorWord(0x7F, 0x7F, 0x7F);
+                int pitch = pitchPixels > 0 ? pitchPixels : Width;
+
+                for (int y = 0; y < rect.Height; y++)
+                {
+                    int rowBaseBytes = checked(baseOffset + (((rect.Y + y) * pitch) + rect.X) * 2);
+
+                    for (int x = 0; x < rect.Width; x++)
+                    {
+                        int off = checked(rowBaseBytes + (x * 2));
+                        ushort value = ReadUInt16LittleEndian(buffer, off);
+                        value = (ushort)(((uint)value >> 1) & mask);
+                        WriteUInt16LittleEndian(buffer, off, value);
+                    }
+                }
+            }
+        }
+
+        // NXBasics::CBitmap::Tool_Darken(NXBasics::SRectangle, unsigned char, unsigned char, unsigned char) const
+        // NXBasics::CBitmap::Tool_Darken(NXBasics::SRectangle, unsigned char, unsigned char, unsigned char) const
+        internal void Tool_Darken(in SRectangle rect, uint rMask, uint gMask, uint bMask)
+        {
+            if (!TryGetPixelBuffer(out byte[] buffer, out int baseOffset, out int pitchPixels, out int bytesPerPixel))
+            {
+                return;
+            }
+
+            if (buffer == null || bytesPerPixel <= 0)
+            {
+                return;
+            }
+
+            SRectangle work = rect;
+            work.Validate();
+
+            if (!work.IsTouching(in _rect))
+            {
+                return;
+            }
+
+            work.CutInside(in _rect);
+
+            if (work.Width <= 0 || work.Height <= 0)
+            {
+                return;
+            }
+
+            byte r = (byte)(rMask & 0xFF);
+            byte g = (byte)(gMask & 0xFF);
+            byte b = (byte)(bMask & 0xFF);
+
+            int pitch = pitchPixels > 0 ? pitchPixels : Width;
+
+            if (_bpp == (byte)BitmapFormat.TrueColor32 && bytesPerPixel == 4)
+            {
+                CTrueColorCreator trueColorCreator = CXBSystemManager.sTrueColorCreatorPtr;
+                uint mask = trueColorCreator != null ? trueColorCreator.GetTrueColorWord(r, g, b) : 0x007F7F7FU;
+
+                for (int y = 0; y < work.Height; y++)
+                {
+                    int rowBaseBytes = checked(baseOffset + (((work.Y + y) * pitch) + work.X) * 4);
+
+                    for (int x = 0; x < work.Width; x++)
+                    {
+                        int off = checked(rowBaseBytes + (x * 4));
+                        uint value = ReadUInt32LittleEndian(buffer, off);
+                        value = (value >> 1) & mask;
+                        WriteUInt32LittleEndian(buffer, off, value);
+                    }
+                }
+
+                return;
+            }
+
+            if (_bpp == (byte)BitmapFormat.HighColor16 && bytesPerPixel == 2)
+            {
+                CHighColorCreator highColorCreator = CXBSystemManager.sHighColorCreatorPtr;
+                if (highColorCreator == null)
+                {
+                    return;
+                }
+
+                ushort mask = highColorCreator.GetHighColorWord(r, g, b);
+
+                for (int y = 0; y < work.Height; y++)
+                {
+                    int rowBaseBytes = checked(baseOffset + (((work.Y + y) * pitch) + work.X) * 2);
+
+                    for (int x = 0; x < work.Width; x++)
+                    {
+                        int off = checked(rowBaseBytes + (x * 2));
+                        ushort value = ReadUInt16LittleEndian(buffer, off);
+                        value = (ushort)(((uint)value >> 1) & mask);
+                        WriteUInt16LittleEndian(buffer, off, value);
+                    }
+                }
             }
         }
         #endregion

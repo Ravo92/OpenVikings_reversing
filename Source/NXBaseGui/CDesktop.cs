@@ -925,7 +925,7 @@ internal sealed class CDesktop : IDisposable
             }
 
             SRectangle elementRect = element.GetRectangle();
-            if (clipRect.IsTouching(in elementRect) == 0)
+            if (!clipRect.IsTouching(in elementRect))
             {
                 continue;
             }
@@ -938,7 +938,7 @@ internal sealed class CDesktop : IDisposable
             using CBitmap sub = new(_desktopBitmap!, in localClip);
 
             // convert clip into element-local coordinates
-            localClip.MovePosition(-elementRect.Left, -elementRect.Top);
+            localClip.MovePosition(-elementRect.X, -elementRect.Y);
 
             // draw element
             element.XGui_BE_Element_Draw(sub, in localClip);
@@ -1041,7 +1041,7 @@ internal sealed class CDesktop : IDisposable
             }
         }
 
-        // --- Left up -------------------------------------------------------------
+        // --- X up -------------------------------------------------------------
         if (leftUp)
         {
             _mouseLeftDown = false;
@@ -1372,7 +1372,7 @@ internal sealed class CDesktop : IDisposable
 
             // hit test in parent coords against element rect
             SRectangle rect = element.GetRectangle();
-            if (point.X < rect.Left || point.X >= rect.Left + rect.Width || point.Y < rect.Top || point.Y >= rect.Top + rect.Height)
+            if (point.X < rect.X || point.X >= rect.X + rect.Width || point.Y < rect.Y || point.Y >= rect.Y + rect.Height)
             {
                 continue;
             }
@@ -1412,8 +1412,8 @@ internal sealed class CDesktop : IDisposable
         if (hit is CBaseWindow window)
         {
             SPoint local = point;
-            local.X -= window.Rect.Left;
-            local.Y -= window.Rect.Top;
+            local.X -= window.Rect.X;
+            local.Y -= window.Rect.Y;
 
             CBaseElement? childHit = window.BW_Internal_FindElementOnPosition(in local, true);
             if (childHit != null)

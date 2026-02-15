@@ -6,14 +6,21 @@ namespace OpenVikings.NC2GuiToolsBase
     // Mirrors the original NXBasics helper functions.
     internal static class NXBasicsApi
     {
-        internal static T XB_Storable_LoadObject<T>(string path) where T : class
+        internal static CStorable XB_Storable_LoadObject(string path)
         {
-            return (T)XBStorable.LoadObject(path);
+            return XBStorable.LoadObject(path);
         }
 
-        internal static CMemory XB_Storable_LoadObject(CFile file)
+        internal static T XB_Storable_LoadObject<T>(string path) where T : class
         {
-            return (CMemory)XBStorable.LoadObject(file);
+            CStorable storable = XBStorable.LoadObject(path);
+
+            return storable is not T typed ? throw new InvalidOperationException($"Expected '{typeof(T).Name}', got '{storable.GetType().Name}' for '{path}'.") : typed;
+        }
+
+        internal static CStorable XB_Storable_LoadObject(CFile file)
+        {
+            return XBStorable.LoadObject(file);
         }
 
         internal static CPalette XB_PictureTool_LoadPaletteOutOfPicture(string path)

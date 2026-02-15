@@ -186,7 +186,7 @@ internal class CBaseWindow : CBaseElement
 
             SRectangle elementRect = node.GetRectangle();
 
-            if (clipRect.IsTouching(in elementRect) == 0)
+            if (!clipRect.IsTouching(in elementRect))
             {
                 continue;
             }
@@ -196,7 +196,7 @@ internal class CBaseWindow : CBaseElement
 
             using CBitmap sub = new(target, in localClip);
 
-            localClip.MovePosition(-elementRect.Left, -elementRect.Top);
+            localClip.MovePosition(-elementRect.X, -elementRect.Y);
 
             node.XGui_BE_Element_Draw(sub, in localClip);
         }
@@ -242,10 +242,10 @@ internal class CBaseWindow : CBaseElement
 
             SRectangle rect = current.GetRectangle();
 
-            if (point.X >= rect.Left &&
-                point.X < rect.Left + rect.Width &&
-                point.Y >= rect.Top &&
-                point.Y < rect.Top + rect.Height)
+            if (point.X >= rect.X &&
+                point.X < rect.X + rect.Width &&
+                point.Y >= rect.Y &&
+                point.Y < rect.Y + rect.Height)
             {
                 SPoint localPoint = point;
                 current.XGui_BE_Element_ParentToLocalPosition(ref localPoint);
@@ -283,7 +283,7 @@ internal class CBaseWindow : CBaseElement
 
         foreach (CBaseElement current in _vars.ElementsReversePickOrder)
         {
-            if (localPoint.IsInside(in current.Rect) == 0)
+            if (!localPoint.IsInside(in current.Rect))
             {
                 continue;
             }
@@ -376,7 +376,7 @@ internal class CBaseWindow : CBaseElement
 
     // ---- Helpers intentionally reference *existing* APIs only; missing members should be compiler errors ----
 
-    private bool IsActive()
+    private static bool IsActive()
     {
         return GetState() == BaseElementState.Active;
     }
@@ -388,7 +388,7 @@ internal class CBaseWindow : CBaseElement
         get { return _state; }
     }
 
-    private BaseElementState GetState()
+    private static BaseElementState GetState()
     {
         return (BaseElementState)GetInternalState();
     }
@@ -396,14 +396,14 @@ internal class CBaseWindow : CBaseElement
     // These "GetInternal*" calls are *not* dummy references to other classes; they are placeholders for base-field access.
     // If base already exposes these properly, delete these wrappers and use base members directly.
 
-    private int GetInternalState()
+    private static int GetInternalState()
     {
         return GetStateRaw();
     }
 
     // ---- More "expected base hooks" (compiler will force implementation) ----
 
-    private int GetStateRaw()
+    private static int GetStateRaw()
     {
         return 0;
     }

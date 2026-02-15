@@ -1,6 +1,4 @@
 ﻿using OpenVikings.Dexter;
-using System;
-using System.IO;
 
 namespace OpenVikings.NXBasics
 {
@@ -335,7 +333,7 @@ namespace OpenVikings.NXBasics
                 return false;
             }
 
-            byte[] libraryContainerPath = library.File.GetResolvedPathBytesNullTerminated();
+            byte[] libraryContainerPath = library.File.GetFileNameBytesNullTerminated();
 
             if (!DexterFile.FileExists(libraryContainerPath, mode))
             {
@@ -349,21 +347,10 @@ namespace OpenVikings.NXBasics
                 return false;
             }
 
-            int pos = unchecked((int)CSimpleFileLibrary.GetFileInLibraryPosition(library, _fileName));
-
-            if (_libraryId != -1)
-            {
-                CSimpleFileLibrary prevLib = GetLibraryByIndex(_libraryId);
-                if (prevLib != null)
-                {
-                    int prevPos = unchecked((int)CSimpleFileLibrary.GetFileInLibraryPosition(prevLib, _fileName));
-                    pos += prevPos;
-                }
-            }
-
+            int pos = unchecked(CSimpleFileLibrary.GetFileInLibraryPosition(library, _fileName));
             DexterFile.FileSeek(_fileHandle, pos, 0);
-            _libraryId = libraryIndex;
 
+            _libraryId = libraryIndex;
             return true;
         }
 
@@ -433,7 +420,7 @@ namespace OpenVikings.NXBasics
             return DexterEndian.FileReadWordLSB(_fileHandle);
         }
 
-        // NXBasics::CFile::Read(void*, unsigned int)
+        // Mirrors: NXBasics::CFile::Read(void*, unsigned int)
         internal int Read(byte[] buffer, int size)
         {
             if (_fileHandle == IntPtr.Zero)
@@ -442,6 +429,29 @@ namespace OpenVikings.NXBasics
             }
 
             return DexterFile.FileRead(_fileHandle, buffer, 0, size, 0);
+        }
+
+        // Managed helper (not in original): read into buffer starting at offset
+        internal int ReadInto(byte[] buffer, int bufferOffset, int size)
+        {
+            if (_fileHandle == IntPtr.Zero)
+            {
+                return 0;
+            }
+
+            ArgumentNullException.ThrowIfNull(buffer);
+
+            if (bufferOffset < 0 || size < 0)
+            {
+                throw new ArgumentOutOfRangeException();
+            }
+
+            if (bufferOffset > buffer.Length - size)
+            {
+                throw new ArgumentException("Buffer too small for requested read.");
+            }
+
+            return DexterFile.FileRead(_fileHandle, buffer, bufferOffset, size, 0);
         }
 
         // NXBasics::CFile::WriteLong(unsigned int)
@@ -475,6 +485,46 @@ namespace OpenVikings.NXBasics
             }
 
             DexterFile.FileWrite(_fileHandle, buffer, 0, size);
+        }
+
+        // Managed helper: write a single byte
+        internal void WriteByte(byte value)
+        {
+            if (_fileHandle == IntPtr.Zero)
+            {
+                return;
+            }
+
+            DexterFile.FileWrite(_fileHandle, ref value, 1);
+        }
+
+        // Managed helper: write buffer region starting at offset
+        internal void Write(byte[] buffer, int bufferOffset, int size)
+        {
+            if (_fileHandle == IntPtr.Zero)
+            {
+                return;
+            }
+
+            ArgumentNullException.ThrowIfNull(buffer);
+
+            if (bufferOffset < 0 || size < 0)
+            {
+                throw new ArgumentOutOfRangeException();
+            }
+
+            if (bufferOffset > buffer.Length - size)
+            {
+                throw new ArgumentException("Buffer too small for requested write.");
+            }
+
+            if (size == 0)
+            {
+                return;
+            }
+
+            // DexterFile.FileWrite uses (buffer, offset, size)
+            DexterFile.FileWrite(_fileHandle, buffer, bufferOffset, size);
         }
 
         // NXBasics::CFile::ReadFlag(bool&)
@@ -791,17 +841,17 @@ namespace OpenVikings.NXBasics
             return result != 0;
         }
 
-        internal byte[] GetResolvedPathBytesNullTerminated()
+        internal byte[] GetFileNameBytesNullTerminated()
         {
-            if (string.IsNullOrEmpty(_resolvedPath))
+            int len = DexterString.StringLength(_fileName);
+            byte[] nt = new byte[len + 1];
+
+            if (len > 0)
             {
-                return [0];
+                Buffer.BlockCopy(_fileName, 0, nt, 0, len);
             }
 
-            byte[] bytes = System.Text.Encoding.ASCII.GetBytes(_resolvedPath);
-            byte[] nt = new byte[bytes.Length + 1];
-            Buffer.BlockCopy(bytes, 0, nt, 0, bytes.Length);
-            nt[^1] = 0;
+            nt[len] = 0;
             return nt;
         }
 

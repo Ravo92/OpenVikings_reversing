@@ -1,4 +1,5 @@
-﻿using OpenVikings.NXSys;
+﻿using OpenVikings.Dexter;
+using OpenVikings.NXSys;
 
 namespace OpenVikings.NXSysKeyManager
 {
@@ -6,11 +7,13 @@ namespace OpenVikings.NXSysKeyManager
     {
         internal static CKeyManager? sTheObjectPtr;
 
+        private readonly DexterOS _dexterOs;
         private readonly LinkedList<SKeyMessage> _queue;
         private uint _lastPushTimeMs;
 
-        internal CKeyManager()
+        internal CKeyManager(DexterOS dexterOs)
         {
+            _dexterOs = dexterOs;
             _queue = new LinkedList<SKeyMessage>();
             sTheObjectPtr = this;
 
@@ -37,12 +40,12 @@ namespace OpenVikings.NXSysKeyManager
         {
             int modifierBits = 0;
 
-            if (DexterOS.KeyState(0x6C) != 0 || DexterOS.KeyState(0x6D) != 0 || DexterOS.KeyState(0x08) != 0)
+            if (_dexterOs.KeyState(0x6C) || _dexterOs.KeyState(0x6D) || _dexterOs.KeyState(0x08))
             {
                 modifierBits += 1;
             }
 
-            if (DexterOS.KeyState(0x6E) != 0 || DexterOS.KeyState(0x6E) != 0 || DexterOS.KeyState(0x09) != 0)
+            if (_dexterOs.KeyState(0x6E) || _dexterOs.KeyState(0x6F) || _dexterOs.KeyState(0x09))
             {
                 modifierBits += 2;
             }

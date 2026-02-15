@@ -15,8 +15,8 @@
         // NXBasics::SPoint::SPoint(NXBasics::SRectangle const&)
         internal SPoint(in SRectangle rect)
         {
-            X = rect.Left;
-            Y = rect.Top;
+            X = rect.X;
+            Y = rect.Y;
         }
 
         // NXBasics::TEMPNAMEPLACEHOLDERVALUE(NXBasics::SPoint const&, NXBasics::SPoint const&)
@@ -48,7 +48,7 @@
         // NXBasics::SPoint::PlaceInside(NXBasics::SRectangle const&)
         internal void PlaceInside(in SRectangle rect)
         {
-            int left = rect.Left;
+            int left = rect.X;
             int x = X;
 
             if (x < left)
@@ -57,7 +57,7 @@
                 x = left;
             }
 
-            int top = rect.Top;
+            int top = rect.Y;
             int y = Y;
 
             if (y < top)
@@ -80,25 +80,19 @@
         }
 
         // NXBasics::SPoint::IsInside(NXBasics::SRectangle const&) const
-        internal readonly int IsInside(in SRectangle rect)
+        internal readonly bool IsInside(in SRectangle rect)
         {
             int x = X;
-            if (rect.Left <= x && x <= rect.Left + rect.Width - 1)
+            if (rect.X <= x && x <= rect.X + rect.Width - 1)
             {
                 int y = Y;
-                if (rect.Top <= y && y <= rect.Top + rect.Height - 1)
+                if (rect.Y <= y && y <= rect.Y + rect.Height - 1)
                 {
-                    return 1;
+                    return true;
                 }
             }
 
-            return 0;
-        }
-
-        // Convenience wrapper for call-sites that prefer bool (keeps the 1:1 int method intact).
-        internal readonly bool IsInsideBool(in SRectangle rect)
-        {
-            return IsInside(in rect) != 0;
+            return false;
         }
     }
 }

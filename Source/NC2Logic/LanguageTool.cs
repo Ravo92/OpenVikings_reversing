@@ -176,10 +176,7 @@ namespace OpenVikings.NC2Logic
                 return string.Empty;
             }
 
-            if (language == null)
-            {
-                language = string.Empty;
-            }
+            language ??= string.Empty;
 
             // Supports two common patterns:
             // - C-style: "...%s..."
@@ -189,7 +186,7 @@ namespace OpenVikings.NC2Logic
                 return string.Format(template, language);
             }
 
-            if (template.IndexOf("%s", StringComparison.Ordinal) >= 0)
+            if (template.Contains("%s"))
             {
                 return template.Replace("%s", language);
             }
@@ -210,7 +207,7 @@ namespace OpenVikings.NC2Logic
                 return basePath;
             }
 
-            if (basePath.EndsWith("\\", StringComparison.Ordinal) || basePath.EndsWith("/", StringComparison.Ordinal))
+            if (basePath.EndsWith('\\') || basePath.EndsWith('/'))
             {
                 return basePath + suffix;
             }

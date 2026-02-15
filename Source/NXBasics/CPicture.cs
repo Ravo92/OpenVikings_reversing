@@ -14,7 +14,7 @@
 
             string extension = Path.GetExtension(filename).ToLowerInvariant();
 
-            CMemory memory = new CMemory(filename);
+            CMemory memory = new(filename);
             try
             {
                 if (extension.StartsWith(".bmp", StringComparison.Ordinal))
@@ -27,10 +27,7 @@
                 }
 
                 // RE: CBitmap::SetPalettePtr(bitmap, palette)
-                if (Bitmap != null)
-                {
-                    Bitmap.SetPalettePtr(Palette);
-                }
+                Bitmap?.SetPalettePtr(Palette);
 
                 _ownsData = true;
             }
@@ -62,27 +59,17 @@
                 return;
             }
 
-            if (Bitmap != null)
-            {
-                Bitmap.Dispose();
-                Bitmap = null;
-            }
-
-            if (Palette != null)
-            {
-                Palette.Dispose();
-                Palette = null;
-            }
+            Bitmap?.Dispose();
+            Bitmap = null;
+            Palette?.Dispose();
+            Palette = null;
 
             _ownsData = false;
         }
 
         internal CBitmap? ExtractBitmap()
         {
-            if (Bitmap != null)
-            {
-                Bitmap.SetPalettePtr(null);
-            }
+            Bitmap?.SetPalettePtr(null);
 
             CBitmap? result = Bitmap;
             Bitmap = null;
@@ -91,10 +78,7 @@
 
         internal CPalette? ExtractPalette()
         {
-            if (Bitmap != null)
-            {
-                Bitmap.SetPalettePtr(null);
-            }
+            Bitmap?.SetPalettePtr(null);
 
             CPalette? result = Palette;
             Palette = null;
@@ -126,19 +110,12 @@
         // ------------------------------------------------------------
         private void UnpackPCX(CMemory memory)
         {
-            // RE reads header words LSB from fixed offsets.
-            // PCX header is 128 bytes.
-            byte[] data = memory.Data;
-            if (data.Length < 128)
+            byte[]? data = memory.BufferArray;
+            if (data == null || data.Length < 128)
             {
                 return;
             }
 
-            // Offsets match RE:
-            // sVar4 = wordLSB(lVar2 + 8)   -> Xmax
-            // sVar5 = wordLSB(lVar2 + 4)   -> Xmin
-            // sVar6 = wordLSB(lVar2 + 10)  -> Ymax
-            // sVar7 = wordLSB(lVar2 + 6)   -> Ymin
             ushort xMax = ReadUInt16LE(data, 8);
             ushort xMin = ReadUInt16LE(data, 4);
             ushort yMax = ReadUInt16LE(data, 10);
@@ -147,16 +124,11 @@
             int width = (xMax - xMin) + 1;
             int height = (yMax - yMin) + 1;
 
-            // RE creates an 8bpp bitmap ('\b')
-            CBitmap bitmap = new(width, height, 8);
+            CBitmap bitmap = new(unchecked((uint)width), unchecked((uint)height), 0x08);
 
-            // RE aligns row bytes: uVar18 = (width + 1) & 0xfffe  (i.e. even)
             int alignedRowBytes = (width + 1) & ~1;
-
-            // Decode RLE starting at 0x80 (128)
             int src = 0x80;
 
-            // Decode into a temporary even-width buffer when width is odd (matches RE).
             byte[] rowBuffer = new byte[alignedRowBytes];
 
             for (int y = 0; y < height; y++)
@@ -192,27 +164,34 @@
                     }
                 }
 
-                // Copy only real width into bitmap
                 for (int x = 0; x < width; x++)
                 {
-                    bitmap.SetPixel8(x, y, rowBuffer[x]);
+                    bitmap.Draw_SetPixel(x, y, rowBuffer[x]);
                 }
             }
 
             Bitmap = bitmap;
 
-            // Palette extraction (RE allocates CPalette and reads 0x300 bytes from end region).
-            // PCX 256-color palette is typically: 0x0C then 768 bytes at end of file.
-            // RE uses: iVar8 = mem.Size; and indexes around iVar8 - 0x2FF .. etc
-            // We'll implement standard: paletteStart = size - 768
-            if (data.Length >= 768)
+            if (data.Length >= 769)
             {
+                int markerIndex = data.Length - 769;
                 int paletteStart = data.Length - 768;
+
+                if (data[markerIndex] != 0x0C)
+                {
+                    paletteStart = data.Length - 768;
+                }
+
                 CPalette palette = new();
 
                 for (int i = 0; i < 256; i++)
                 {
                     int p = paletteStart + (i * 3);
+                    if (p + 2 >= data.Length)
+                    {
+                        break;
+                    }
+
                     byte r = data[p + 0];
                     byte g = data[p + 1];
                     byte b = data[p + 2];
@@ -233,8 +212,8 @@
         // ------------------------------------------------------------
         private void UnpackBMP(CMemory memory)
         {
-            byte[] data = memory.Data;
-            if (data.Length < 54)
+            byte[]? data = memory.BufferArray;
+            if (data == null || data.Length < 54)
             {
                 return;
             }
@@ -351,12 +330,9 @@
 
         internal static CBitmap DecodeUnpacked8(int width, int height, byte[] src, bool topDown)
         {
-            CBitmap bitmap = new(width, height, 8);
+            CBitmap bitmap = new(unchecked((uint)width), unchecked((uint)height), 0x08);
 
             int srcIndex = 0;
-
-            int rowStride = width;
-            int paddedStride = (rowStride + 3) & ~3;
 
             for (int y = 0; y < height; y++)
             {
@@ -369,13 +345,11 @@
                         return bitmap;
                     }
 
-                    // Matches NXBasics::CBitmap::Draw_SetPixel(int,int,unsigned char)
                     bitmap.Draw_SetPixel(x, dstY, src[srcIndex]);
                     srcIndex += 1;
                 }
 
-                // BMP rows are padded to 4-byte boundaries
-                srcIndex += paddedStride - rowStride;
+                // IMPORTANT: No 4-byte padding skip for 8bpp in the original.
             }
 
             return bitmap;
@@ -383,12 +357,9 @@
 
         private static CBitmap DecodeUnpacked16To32(int width, int height, byte[] src, bool topDown)
         {
-            CBitmap bitmap = new(width, height, 32);
+            CBitmap bitmap = new(unchecked((uint)width), unchecked((uint)height), 0x20);
 
             int srcIndex = 0;
-
-            int rowBytes = width * 2;
-            int paddedRowBytes = (rowBytes + 3) & ~3;
 
             for (int y = 0; y < height; y++)
             {
@@ -398,24 +369,21 @@
                 {
                     if (srcIndex + 1 >= src.Length)
                     {
-                        break;
+                        return bitmap;
                     }
 
                     ushort packed = (ushort)(src[srcIndex] | (src[srcIndex + 1] << 8));
                     srcIndex += 2;
 
-                    // RE uses TrueColorCreator with (r,g,b) from 5-5-5-ish extraction:
-                    // r = (packed >> 7) & 0xF8
-                    // g = (packed >> 2) & 0xF8
-                    // b = (packed * 8) & 0xFF
                     byte r = (byte)((packed >> 7) & 0xF8);
                     byte g = (byte)((packed >> 2) & 0xF8);
                     byte b = (byte)((packed * 8) & 0xFF);
 
-                    bitmap.SetPixel32(x, dstY, 255, r, g, b);
+                    uint color = CXBSystemManager.sTrueColorCreatorPtr.GetTrueColorWord(r, g, b);
+                    bitmap.Draw_SetPixel(x, dstY, color);
                 }
 
-                srcIndex += (paddedRowBytes - rowBytes);
+                // IMPORTANT: No padding skip for 16bpp in the original.
             }
 
             return bitmap;
@@ -423,7 +391,7 @@
 
         private static CBitmap DecodeUnpacked24To32(int width, int height, byte[] src, bool topDown)
         {
-            CBitmap bitmap = new(width, height, 32);
+            CBitmap bitmap = new(unchecked((uint)width), unchecked((uint)height), 0x20);
 
             int srcIndex = 0;
             int rowBytes = width * 3;
@@ -437,7 +405,7 @@
                 {
                     if (srcIndex + 2 >= src.Length)
                     {
-                        break;
+                        return bitmap;
                     }
 
                     byte b = src[srcIndex + 0];
@@ -445,7 +413,8 @@
                     byte r = src[srcIndex + 2];
                     srcIndex += 3;
 
-                    bitmap.SetPixel32(x, dstY, 255, r, g, b);
+                    uint color = CXBSystemManager.sTrueColorCreatorPtr.GetTrueColorWord(r, g, b);
+                    bitmap.Draw_SetPixel(x, dstY, color);
                 }
 
                 srcIndex += pad;
@@ -456,10 +425,9 @@
 
         private static CBitmap DecodeUnpacked32To32(int width, int height, byte[] src, bool topDown)
         {
-            CBitmap bitmap = new(width, height, 32);
+            CBitmap bitmap = new(unchecked((uint)width), unchecked((uint)height), 0x20);
 
             int srcIndex = 0;
-            int rowBytes = width * 4;
 
             for (int y = 0; y < height; y++)
             {
@@ -469,7 +437,7 @@
                 {
                     if (srcIndex + 3 >= src.Length)
                     {
-                        break;
+                        return bitmap;
                     }
 
                     byte b = src[srcIndex + 0];
@@ -477,8 +445,11 @@
                     byte r = src[srcIndex + 2];
                     srcIndex += 4;
 
-                    bitmap.SetPixel32(x, dstY, 255, r, g, b);
+                    uint color = CXBSystemManager.sTrueColorCreatorPtr.GetTrueColorWord(r, g, b);
+                    bitmap.Draw_SetPixel(x, dstY, color);
                 }
+
+                // IMPORTANT: No padding skip needed for 32bpp in the original.
             }
 
             return bitmap;
@@ -488,7 +459,7 @@
         {
             // RE decodes into bottom-up coordinate system by default.
             // We'll write into bitmap coordinates with dstY computed.
-            CBitmap bitmap = new(width, height, 8);
+            CBitmap bitmap = new(unchecked((uint)width), unchecked((uint)height), 0x08);
 
             int x = 0;
             int y = topDown ? 0 : (height - 1);
@@ -507,7 +478,7 @@
                     {
                         if (x >= 0 && x < width && y >= 0 && y < height)
                         {
-                            bitmap.SetPixel8(x, y, value);
+                            bitmap.Draw_SetPixel(x, y, value);
                         }
 
                         x += 1;
@@ -565,7 +536,7 @@
 
                         if (x >= 0 && x < width && y >= 0 && y < height)
                         {
-                            bitmap.SetPixel8(x, y, literal);
+                            bitmap.Draw_SetPixel(x, y, literal);
                         }
 
                         x += 1;

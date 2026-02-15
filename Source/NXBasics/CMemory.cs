@@ -94,15 +94,53 @@
         {
             _size = 0;
             _buffer = null;
+            _disposed = false;
 
-            byte[] fileBytes = File.ReadAllBytes(filePath);
-            _size = (uint)fileBytes.Length;
+            using CFile file = new(filePath, true);
 
-            if (_size != 0)
+            // If CFile is not auto-opened by ctor, ensure it is open here.
+            // Example:
+            // if (!file.OpenForReading()) { throw new IOException("Could not open file for reading."); }
+
+            ulong fileSize = file.GetSize();
+
+            if (fileSize > uint.MaxValue)
             {
-                _buffer = new byte[fileBytes.Length];
-                FillInternal(_buffer, AllocFillPattern); // mimic 0xEE "fresh alloc" fill
-                System.Buffer.BlockCopy(fileBytes, 0, _buffer, 0, fileBytes.Length);
+                throw new InvalidDataException("File too large for CMemory.");
+            }
+
+            if (fileSize > int.MaxValue)
+            {
+                throw new InvalidDataException("File too large to be read into a single managed byte array.");
+            }
+
+            uint size = (uint)fileSize;
+            _size = size;
+
+            if (size == 0)
+            {
+                return;
+            }
+
+            AllocateMemory(size);
+
+            if (_buffer == null)
+            {
+                throw new InvalidOperationException("CMemory buffer allocation failed.");
+            }
+
+            int toRead = (int)size;
+            int totalRead = 0;
+
+            while (totalRead < toRead)
+            {
+                int read = file.ReadInto(_buffer, toRead - totalRead, totalRead); // if you have offset overload
+                if (read <= 0)
+                {
+                    throw new EndOfStreamException("CMemory: could not read full buffer from file.");
+                }
+
+                totalRead += read;
             }
         }
 
@@ -299,10 +337,11 @@
 
         private void ThrowIfDisposed()
         {
-            if (_disposed)
+            if (!_disposed)
             {
-                throw new ObjectDisposedException(nameof(CMemory));
+                return;
             }
+            throw new ObjectDisposedException(nameof(CMemory));
         }
 
         private static void FillInternal(byte[] buffer, byte value)
@@ -324,19 +363,6 @@
             {
                 buffer[i] = value;
             }
-        }
-
-        private static void WriteUInt32LittleEndian(Stream output, uint value)
-        {
-            // Little-endian like typical "WriteLong" in many legacy engines.
-            Span<byte> tmp =
-            [
-                (byte)(value & 0xFF),
-                (byte)((value >> 8) & 0xFF),
-                (byte)((value >> 16) & 0xFF),
-                (byte)((value >> 24) & 0xFF),
-            ];
-            output.Write(tmp);
         }
 
         // Replace these with your actual engine crypto bindings.

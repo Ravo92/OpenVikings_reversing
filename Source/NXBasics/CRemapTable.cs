@@ -1,6 +1,8 @@
-﻿namespace OpenVikings.NXBasics
+﻿using OpenVikings.NXBasics.Structs;
+
+namespace OpenVikings.NXBasics
 {
-    internal sealed class CRemapTable
+    internal sealed class CRemapTable : CStorable
     {
         private const int TableSize = 0x100;
         private readonly byte[] _table;
@@ -88,14 +90,14 @@
         }
 
         // NXBasics::CRemapTable::Storable_SaveData(NXBasics::CFile&)
-        internal void Storable_SaveData(CFile file)
+        internal override void Storable_SaveData(CFile file)
         {
             ArgumentNullException.ThrowIfNull(file);
             file.Write(_table, TableSize);
         }
 
         // NXBasics::CRemapTable::Storable_GetId() const
-        internal static ulong Storable_GetId()
+        internal override uint Storable_GetId()
         {
             return 0x3F7;
         }

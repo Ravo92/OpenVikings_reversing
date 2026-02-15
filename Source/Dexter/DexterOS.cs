@@ -66,6 +66,9 @@ namespace OpenVikings.Dexter
         private readonly DexterGFXState _gfxState;
         private readonly DexterGFXScreen _gfxScreen;
 
+        internal int MouseX => _mouseX;
+        internal int MouseY => _mouseY;
+
         private readonly Sdl _sdl;
         private bool _sdlInitialized;
 
@@ -327,23 +330,25 @@ namespace OpenVikings.Dexter
 
         internal void MousePressDown(byte button)
         {
+            if (button >= 5)
+            {
+                return;
+            }
+
             short x = _mouseX;
             short y = _mouseY;
 
             ushort qualifiers = GetQualifiersInternal();
 
-            if (button < 5)
+            if (_mouseButtonState[button] != 1)
             {
-                if (_mouseButtonState[button] != 1)
-                {
-                    _mouseButtonState[button] = 1;
-                    int now = (int)_osEnvironment.Time();
-                    _mouseButtonTime[button] = now - _timeCheckReset;
+                _mouseButtonState[button] = 1;
+                int now = (int)_osEnvironment.Time();
+                _mouseButtonTime[button] = now - _timeCheckReset;
 
-                    if (_mouseButtonCount <= button)
-                    {
-                        _mouseButtonCount = button + 1;
-                    }
+                if (_mouseButtonCount <= button)
+                {
+                    _mouseButtonCount = button + 1;
                 }
             }
 
@@ -352,24 +357,28 @@ namespace OpenVikings.Dexter
 
         internal void MousePressUp(byte button)
         {
+            if (button >= 5)
+            {
+                return;
+            }
+
             short x = _mouseX;
             short y = _mouseY;
 
             ushort qualifiers = GetQualifiersInternal();
 
-            if (button < 5)
+            if (_mouseButtonState[button] == 0)
             {
-                if (_mouseButtonState[button] != 0)
-                {
-                    _mouseButtonState[button] = 0;
-
-                    int now = (int)_osEnvironment.Time();
-                    int downTime = _mouseButtonTime[button];
-                    int duration = now - (_timeCheckReset + downTime);
-
-                    EnqueueMouseEvent(2, button, duration, x, y, qualifiers);
-                }
+                return;
             }
+
+            _mouseButtonState[button] = 0;
+
+            int now = (int)_osEnvironment.Time();
+            int downTime = _mouseButtonTime[button];
+            int duration = now - (_timeCheckReset + downTime);
+
+            EnqueueMouseEvent(2, button, duration, x, y, qualifiers);
         }
 
         internal void SetFocusChange(byte focusEventCode)
@@ -632,37 +641,37 @@ namespace OpenVikings.Dexter
             _mouseButtonCount = 1;
             _appPath = string.Empty;
 
-            // 0x30 == SDL_INIT_VIDEO | SDL_INIT_EVENTS in the original code path
-            int initResult = _sdl.Init(0x30);
+            // SDL_INIT_VIDEO | SDL_INIT_EVENTS
+            uint flags = (uint)(Sdl.InitVideo | Sdl.InitEvents);
+
+            int initResult = _sdl.Init(flags);
             if (initResult < 0)
             {
                 return false;
             }
 
+            _sdlInitialized = true;
+
             DisplayMode mode = default;
-            unsafe
+            int dmResult = _sdl.GetDesktopDisplayMode(0, ref mode);
+            if (dmResult < 0)
             {
-                int dmResult = _sdl.GetDesktopDisplayMode(0, &mode);
-                if (dmResult < 0)
-                {
-                    return false;
-                }
+                return false;
             }
 
             int w = mode.W;
             int h = mode.H;
 
-            if ((w > 0x780 || h > 0x4b0) && (w * 2 < 0xCCCCCCD) && (h * 2 < 0xCCCCCCD))
+            if ((w > 0x780 || h > 0x4B0) && (w * 2 < 0x0CCCCCCD) && (h * 2 < 0x0CCCCCCD))
             {
                 w >>= 1;
                 h >>= 1;
             }
 
-            int windowW = w & 0xFFFC;
+            int windowW = w & unchecked((int)0xFFFC);
             int windowH = h;
 
             _gfxScreen.SetWindowSize(windowW, windowH);
-
             return true;
         }
 

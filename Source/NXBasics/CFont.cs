@@ -3,7 +3,7 @@
 namespace OpenVikings.NXBasics
 {
     // NXBasics::CFont
-    internal sealed class CFont : IDisposable
+    internal sealed class CFont : CStorable, IDisposable
     {
         // this + 0x08 (4 bytes)
         private uint _value08;
@@ -11,21 +11,40 @@ namespace OpenVikings.NXBasics
         // this + 0x0C (4 bytes)
         private uint _value0C;
 
-        // this + 0x10 (4 bytes) -> used as additional spacing in width computation
+        // this + 0x10 (4 bytes) -> additional spacing in width computation
         private int _spacing;
 
         // this + 0x18 (8 bytes)
-        private CBobManager _bobManager;
+        private CBobManager? _bobManager;
 
         // this + 0x20 (8 bytes)
-        private CPalette _palettePtr;
+        private CPalette? _palettePtr;
 
         private bool _disposed;
+
+        private const int FirstPrintableChar = 0x20;
+        private const uint SpaceBobId = 0x49u;
 
         // NXBasics::CFont::CFont()
         internal CFont()
         {
             L_InitObject();
+        }
+
+        // NXBasics::CFont::CFont(NXBasics::CFile&, unsigned int)
+        internal CFont(CFile file, uint version)
+        {
+            ArgumentNullException.ThrowIfNull(file);
+
+            L_InitObject();
+
+            _value08 = file.ReadLong();
+            _value0C = file.ReadLong();
+
+            CStorable? storable = XBStorable.LoadObjectOrNull(file);
+            _bobManager = storable as CBobManager;
+
+            _ = version; // decompile param exists; not used
         }
 
         // NXBasics::CFont::l_InitObject()
@@ -36,18 +55,6 @@ namespace OpenVikings.NXBasics
             _spacing = 0;
             _bobManager = null;
             _palettePtr = null;
-        }
-
-        // NXBasics::CFont::CFont(NXBasics::CFile&, unsigned int)
-        internal CFont(CFile file, uint version)
-        {
-            L_InitObject();
-
-            _value08 = unchecked(file.ReadLong());
-            _value0C = unchecked(file.ReadLong());
-
-            CStorable storable = XB_Storable_LoadObject(file);
-            _bobManager = storable as CBobManager;
         }
 
         // NXBasics::CFont::~CFont()
@@ -61,6 +68,8 @@ namespace OpenVikings.NXBasics
             _bobManager?.Dispose();
             _bobManager = null;
 
+            _palettePtr = null;
+
             _disposed = true;
         }
 
@@ -72,20 +81,32 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            int bobIndex = character - 0x20;
-            _bobManager.PrintBob(bobIndex, target, x, y, _palettePtr);
+            uint bobId = GetBobIdForPrint(character);
+            if (bobId == 0xFFFFFFFFu)
+            {
+                return;
+            }
+
+            _bobManager.PrintBob(bobId, target, x, y, _palettePtr);
         }
 
         // NXBasics::CFont::PrintCharacter(NXBasics::CPalette&, NXBasics::CBitmap const&, unsigned char, int, int) const
         internal void PrintCharacter(CPalette palette, CBitmap target, byte character, int x, int y)
         {
+            ArgumentNullException.ThrowIfNull(palette);
+
             if (_bobManager == null)
             {
                 return;
             }
 
-            int bobIndex = character - 0x20;
-            _bobManager.PrintBob(bobIndex, target, x, y, palette);
+            uint bobId = GetBobIdForPrint(character);
+            if (bobId == 0xFFFFFFFFu)
+            {
+                return;
+            }
+
+            _bobManager.PrintBob(bobId, target, x, y, palette);
         }
 
         // NXBasics::CFont::PrintCharacter(NXBasics::SColorRGB const&, NXBasics::CBitmap const&, unsigned char, int, int) const
@@ -96,8 +117,19 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            int bobIndex = character - 0x20;
-            _bobManager.PrintBobUsingTransparency(bobIndex, target, x, y, transparentColor);
+            uint bobId = GetBobIdForPrint(character);
+            if (bobId == 0xFFFFFFFFu)
+            {
+                return;
+            }
+
+            // C++ calls: CBobManager::PrintBob_UsingTransparency(bobId, dst, x, y, SColorRGB const&)
+            // The current C# CBobManager implements a different overload:
+            // PrintBob_UsingTransparency(uint bobId, CBitmap destination, uint alpha, int dstX, int dstY, CPalette? palette)
+            // Until the SColorRGB overload exists in CBobManager, the alpha-based one is used here.
+            _bobManager.PrintBob_UsingTransparency(bobId, target, 0xFFu, x, y, _palettePtr);
+
+            _ = transparentColor; // kept to preserve API parity; used once CBobManager has the matching overload
         }
 
         // NXBasics::CFont::GetCharacterWidth(unsigned char) const
@@ -108,14 +140,20 @@ namespace OpenVikings.NXBasics
                 return 0;
             }
 
-            int bobIndex = character - 0x20;
-
-            if (!_bobManager.TryGetBobAreaRectangle(bobIndex, out SRectangle rect))
+            uint bobId = GetBobId_Default(character);
+            if (bobId == 0xFFFFFFFFu)
             {
                 return 0;
             }
 
-            return _spacing + rect.X + rect.Width + 1;
+            SRectangle? rect = _bobManager.GetBobAreaRectanglePtr(bobId);
+            if (rect == null)
+            {
+                return 0;
+            }
+
+            // C++: spacing + rect.X + rect.Width + 1
+            return _spacing + rect.Value.X + rect.Value.Width + 1;
         }
 
         // NXBasics::CFont::GetCharacterHeight(unsigned char) const
@@ -126,25 +164,29 @@ namespace OpenVikings.NXBasics
                 return 0;
             }
 
-            int bobIndex = character - 0x20;
-
-            if (!_bobManager.TryGetBobAreaRectangle(bobIndex, out SRectangle rect))
+            uint bobId = GetBobId_Default(character);
+            if (bobId == 0xFFFFFFFFu)
             {
                 return 0;
             }
 
-            return rect.Height + rect.Y + 1;
+            SRectangle? rect = _bobManager.GetBobAreaRectanglePtr(bobId);
+            if (rect == null)
+            {
+                return 0;
+            }
+
+            // C++: rect.Height + rect.Y + 1
+            return rect.Value.Height + rect.Value.Y + 1;
         }
 
         // NXBasics::CFont::GetPixelWidth(char const*) const
-        internal int GetPixelWidth(string text)
+        internal int GetPixelWidth(string? text)
         {
             if (_bobManager == null || text == null)
             {
                 return 0;
             }
-
-            const int SpaceBobIndex = 0x49;
 
             int total = 0;
 
@@ -156,24 +198,33 @@ namespace OpenVikings.NXBasics
                     break;
                 }
 
-                int bobIndex;
+                uint bobId;
                 if (ch == ' ' || ch == '\t')
                 {
-                    bobIndex = SpaceBobIndex;
+                    bobId = SpaceBobId;
                 }
                 else
                 {
-                    bobIndex = ((int)(byte)ch) - 0x20;
+                    int idx = (byte)ch - FirstPrintableChar;
+                    if (idx < 0)
+                    {
+                        bobId = 0xFFFFFFFFu;
+                    }
+                    else
+                    {
+                        bobId = unchecked((uint)idx);
+                    }
                 }
 
-                int w;
-                if (!_bobManager.TryGetBobAreaRectangle(bobIndex, out SRectangle rect))
+                int w = 0;
+
+                if (bobId != 0xFFFFFFFFu)
                 {
-                    w = 0;
-                }
-                else
-                {
-                    w = _spacing + rect.X + rect.Width + 1;
+                    SRectangle? rect = _bobManager.GetBobAreaRectanglePtr(bobId);
+                    if (rect != null)
+                    {
+                        w = _spacing + rect.Value.X + rect.Value.Width + 1;
+                    }
                 }
 
                 total += w;
@@ -183,7 +234,7 @@ namespace OpenVikings.NXBasics
         }
 
         // NXBasics::CFont::GetPixelHeight(char const*) const
-        internal int GetPixelHeight(string text)
+        internal int GetPixelHeight(string? text)
         {
             if (_bobManager == null || text == null)
             {
@@ -205,18 +256,20 @@ namespace OpenVikings.NXBasics
                     continue;
                 }
 
-                int bobIndex = ((int)(byte)ch) - 0x20;
-
-                int h;
-                if (!_bobManager.TryGetBobAreaRectangle(bobIndex, out SRectangle rect))
+                int idx = (byte)ch - FirstPrintableChar;
+                if (idx < 0)
                 {
-                    h = 0;
-                }
-                else
-                {
-                    h = rect.Height + rect.Y + 1;
+                    continue;
                 }
 
+                uint bobId = unchecked((uint)idx);
+                SRectangle? rect = _bobManager.GetBobAreaRectanglePtr(bobId);
+                if (rect == null)
+                {
+                    continue;
+                }
+
+                int h = rect.Value.Height + rect.Value.Y + 1;
                 if (maxHeight < h)
                 {
                     maxHeight = h;
@@ -227,37 +280,54 @@ namespace OpenVikings.NXBasics
         }
 
         // NXBasics::CFont::SetPalettePtr(NXBasics::CPalette*)
-        internal void SetPalettePtr(CPalette palette)
+        internal void SetPalettePtr(CPalette? palette)
         {
             _palettePtr = palette;
         }
 
         // NXBasics::CFont::Storable_SaveData(NXBasics::CFile&)
-        internal void Storable_SaveData(CFile file)
+        internal override void Storable_SaveData(CFile file)
         {
-            file.WriteLong(unchecked(_value08));
-            file.WriteLong(unchecked(_value0C));
+            ArgumentNullException.ThrowIfNull(file);
 
-            if (_bobManager != null)
+            file.WriteLong(_value08);
+            file.WriteLong(_value0C);
+
+            // C++ always saves the storable at +0x18. If null, write a null header (id=0, version=0).
+            if (_bobManager == null)
             {
-                _bobManager.Storable_Save(file);
+                file.WriteLong(0u);
+                file.WriteLong(0u);
+                return;
             }
-            else
-            {
-                CStorable.Storable_SaveNull(file);
-            }
+
+            _bobManager.Storable_Save(file);
         }
 
         // NXBasics::CFont::Storable_GetId() const
-        internal static ulong Storable_GetId()
+        internal override uint Storable_GetId()
         {
-            return 0x3F5UL;
+            return 0x3F5u;
         }
 
-        // Placeholder for your existing loader hook (matches decompile naming).
-        private static CStorable XB_Storable_LoadObject(CFile file)
+        private static uint GetBobId_Default(byte character)
         {
-            return CStorable.XB_Storable_LoadObject(file);
+            if (character < FirstPrintableChar)
+            {
+                return 0xFFFFFFFFu;
+            }
+
+            return unchecked((uint)(character - FirstPrintableChar));
+        }
+
+        private static uint GetBobIdForPrint(byte character)
+        {
+            if (character == (byte)' ' || character == (byte)'\t')
+            {
+                return SpaceBobId;
+            }
+
+            return GetBobId_Default(character);
         }
     }
 }

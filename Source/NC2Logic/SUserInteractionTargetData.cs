@@ -108,9 +108,7 @@ namespace OpenVikings.NC2Logic
                     return 0;
                 }
 
-                int serial;
-                bool alive;
-                if (!validation.TryGetHumanSerial(HumanId, out serial, out alive) || !alive || serial != HumanSerial)
+                if (!validation.TryGetHumanSerial(HumanId, out int serial, out bool alive) || !alive || serial != HumanSerial)
                 {
                     Tool_ResetToEmptyInvalid();
                     return 1;
@@ -124,9 +122,7 @@ namespace OpenVikings.NC2Logic
                     return 0;
                 }
 
-                int serial;
-                bool alive;
-                if (!validation.TryGetAnimalSerial(AnimalId, out serial, out alive) || !alive || serial != AnimalSerial)
+                if (!validation.TryGetAnimalSerial(AnimalId, out int serial, out bool alive) || !alive || serial != AnimalSerial)
                 {
                     Tool_ResetToEmptyInvalid();
                     return 1;
@@ -138,9 +134,7 @@ namespace OpenVikings.NC2Logic
                 // RE: only validate if GuideId != -1
                 if (GuideId != -1)
                 {
-                    int serial;
-                    bool alive;
-                    if (!validation.TryGetGuideSerial(GuideId, out serial, out alive) || !alive || serial != GuideSerial)
+                    if (!validation.TryGetGuideSerial(GuideId, out int serial, out bool alive) || !alive || serial != GuideSerial)
                     {
                         Tool_ResetToEmptyInvalid();
                         return 1;
@@ -152,9 +146,7 @@ namespace OpenVikings.NC2Logic
                 // RE: only validate if HouseId != -1
                 if (HouseId != -1)
                 {
-                    int serial;
-                    bool alive;
-                    if (!validation.TryGetHouseSerial(HouseId, out serial, out alive) || !alive || serial != HouseSerial)
+                    if (!validation.TryGetHouseSerial(HouseId, out int serial, out bool alive) || !alive || serial != HouseSerial)
                     {
                         Tool_ResetToEmptyInvalid();
                         return 1;
@@ -166,9 +158,7 @@ namespace OpenVikings.NC2Logic
                 // RE: only validate if VehicleId != -1
                 if (VehicleId != -1)
                 {
-                    int serial;
-                    bool alive;
-                    if (!validation.TryGetVehicleSerial(VehicleId, out serial, out alive) || !alive || serial != VehicleSerial)
+                    if (!validation.TryGetVehicleSerial(VehicleId, out int serial, out bool alive) || !alive || serial != VehicleSerial)
                     {
                         Tool_ResetToEmptyInvalid();
                         return 1;
@@ -183,10 +173,8 @@ namespace OpenVikings.NC2Logic
         {
             if (Type == (int)UserInteractionTargetType.House && HouseId == houseId)
             {
-                int serial;
-                bool alive;
 
-                if (validation.TryGetHouseSerial(houseId, out serial, out alive) && alive)
+                if (validation.TryGetHouseSerial(houseId, out int serial, out bool alive) && alive)
                 {
                     return HouseSerial == serial;
                 }
@@ -199,10 +187,8 @@ namespace OpenVikings.NC2Logic
         {
             if (Type == (int)UserInteractionTargetType.Human && HumanId == humanId)
             {
-                int serial;
-                bool alive;
 
-                if (validation.TryGetHumanSerial(humanId, out serial, out alive) && alive)
+                if (validation.TryGetHumanSerial(humanId, out int serial, out bool alive) && alive)
                 {
                     return HumanSerial == serial;
                 }
@@ -215,10 +201,8 @@ namespace OpenVikings.NC2Logic
         {
             if (Type == (int)UserInteractionTargetType.Animal && AnimalId == animalId)
             {
-                int serial;
-                bool alive;
 
-                if (validation.TryGetAnimalSerial(animalId, out serial, out alive) && alive)
+                if (validation.TryGetAnimalSerial(animalId, out int serial, out bool alive) && alive)
                 {
                     return AnimalSerial == serial;
                 }
@@ -231,10 +215,8 @@ namespace OpenVikings.NC2Logic
         {
             if (Type == (int)UserInteractionTargetType.Vehicle && VehicleId == vehicleId)
             {
-                int serial;
-                bool alive;
 
-                if (validation.TryGetVehicleSerial(vehicleId, out serial, out alive) && alive)
+                if (validation.TryGetVehicleSerial(vehicleId, out int serial, out bool alive) && alive)
                 {
                     return VehicleSerial == serial;
                 }
@@ -247,10 +229,8 @@ namespace OpenVikings.NC2Logic
         {
             if (Type == (int)UserInteractionTargetType.Guide && GuideId == guideId)
             {
-                int serial;
-                bool alive;
 
-                if (validation.TryGetGuideSerial(guideId, out serial, out alive) && alive)
+                if (validation.TryGetGuideSerial(guideId, out int serial, out bool alive) && alive)
                 {
                     return GuideSerial == serial;
                 }

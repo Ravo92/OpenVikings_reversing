@@ -1,4 +1,5 @@
 ﻿using OpenVikings.Interfaces;
+using OpenVikings.NC2Logic;
 using OpenVikings.NXBasics;
 
 namespace OpenVikings.NC2GuiToolsBase
@@ -48,6 +49,8 @@ namespace OpenVikings.NC2GuiToolsBase
 
         internal CGuiBaseDataManager()
         {
+            // Ensure old static state is not kept if this type is re-instantiated.
+            sTheObjectPtr?.Dispose();
             sTheObjectPtr = this;
 
             // Fonts
@@ -91,8 +94,9 @@ namespace OpenVikings.NC2GuiToolsBase
             }
 
             // Localized BMD
-            string bmdPath = LanguageTool_GetFilename("data\\gui\\lang\\%s\\bobs\\ls_gui_window.bmd", false);
-            GuiWindowBmd = NXBasicsApi.XB_Storable_LoadObject(bmdPath) as IDisposable;
+            bool found = LanguageTool.GetFilename("data\\gui\\lang\\%s\\bobs\\ls_gui_window.bmd", out string bmdPath, false);
+            GuiWindowBmd = found ? NXBasicsApi.XB_Storable_LoadObject(bmdPath) as IDisposable : null;
+
 
             // Other palettes
             PaletteFrame = LoadPalette("data\\gui\\palettes\\frame.pcx");
@@ -107,26 +111,13 @@ namespace OpenVikings.NC2GuiToolsBase
 
         public void Dispose()
         {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
-
-        ~CGuiBaseDataManager()
-        {
-            Dispose(false);
-        }
-
-        private void Dispose(bool disposing)
-        {
             if (_disposed)
             {
                 return;
             }
 
-            // Mirrors: DynamicData_Free();
             DynamicData_Free();
 
-            // Dispose static resources in roughly the original order
             DisposeAndNull(ref PaletteContext);
             DisposeAndNull(ref PaletteIconsLeft);
             DisposeAndNull(ref PaletteBarDisabled);
@@ -147,8 +138,12 @@ namespace OpenVikings.NC2GuiToolsBase
             DisposeAndNull(ref Font10);
             DisposeAndNull(ref Font08);
 
+            // Mirrors the decompile "MemorySet(&mStaticVars,'\0',...)" by clearing all statics.
             sTheObjectPtr = null;
+            _dynamicLoaded = false;
+
             _disposed = true;
+            GC.SuppressFinalize(this);
         }
 
         // NC2GuiToolsBase::CGuiBaseDataManager::DynamicData_Free()
@@ -163,11 +158,7 @@ namespace OpenVikings.NC2GuiToolsBase
             PaletteChangedSafe(PaletteBgNormal);
             PaletteChangedSafe(PalettePapyrus);
 
-            if (!_dynamicLoaded)
-            {
-                return;
-            }
-
+            // Dispose whatever exists, independent of the flag (safer than the decompile guard).
             DisposeAndNull(ref BgHeadline);
             DisposeAndNull(ref BgButtonHilite);
             DisposeAndNull(ref BgSelected);
@@ -194,8 +185,7 @@ namespace OpenVikings.NC2GuiToolsBase
 
         private static CPalette? LoadPalette(string path)
         {
-            object? obj = NXBasicsApi.XB_PictureTool_LoadPaletteOutOfPicture(path);
-            return obj as CPalette;
+            return NXBasicsApi.XB_PictureTool_LoadPaletteOutOfPicture(path);
         }
 
         private static T? LoadObjectAs<T>(string path) where T : class
@@ -211,7 +201,7 @@ namespace OpenVikings.NC2GuiToolsBase
                 return;
             }
 
-            CFont.SetPalettePtr(font, palette);
+            font.SetPalettePtr(palette);
         }
 
         private static void PaletteChangedSafe(CPalette? palette)
@@ -221,7 +211,7 @@ namespace OpenVikings.NC2GuiToolsBase
                 return;
             }
 
-            CPalette.PaletteChanged(palette);
+            palette.PaletteChanged();
         }
 
         private static void DisposeAndNull<T>(ref T? obj) where T : class
@@ -236,26 +226,23 @@ namespace OpenVikings.NC2GuiToolsBase
 
         private static CBitmap? LoadBitmapFromPicture(string pcxPath, byte bpp)
         {
-            // Mirrors:
-            //   CPicture pic("...pcx");
-            //   CBitmap bmp(pic.Width, pic.Height, bpp);
-            //   CopyIntoBitmap(pic, bmp, 0, 0);
             using CPicture picture = new(pcxPath);
 
-            uint w = picture.Width;
-            uint h = picture.Height;
+            CBitmap? source = picture.Bitmap;
+            if (source == null)
+            {
+                return null;
+            }
+
+            uint w = (uint)source.Width;
+            uint h = (uint)source.Height;
 
             CBitmap bitmap = new(w, h, bpp);
-            CBitmap.CopyIntoBitmap(picture, bitmap, 0, 0);
+
+            source.CopyIntoBitmap(bitmap, 0, 0);
+            bitmap.SetPalettePtr(picture.Palette);
 
             return bitmap;
-        }
-
-        private static string LanguageTool_GetFilename(string format, bool useFallback)
-        {
-            // Mirrors: NC2Logic::LanguageTool_GetFilename("...%s...", local_128, false)
-            // Assumes a managed wrapper exists that returns a string.
-            return LanguageTool_GetFilename(format, useFallback);
         }
 
         private static void TrySetFontInt32(CFont? font, int value)
@@ -267,7 +254,8 @@ namespace OpenVikings.NC2GuiToolsBase
 
             // The decompile writes to (font + 0x10). If a proper property exists, prefer it.
             // Keep this method as a single place to adjust once the real field is identified.
-            font.TrySetInternalInt32_0x10(value);
+
+            // font.TrySetInternalInt32_0x10(value);
         }
     }
 }

@@ -1,6 +1,5 @@
 ﻿namespace OpenVikings.NXBasics.Structs
 {
-    // Minimal RGB + modifier, matching how CPalette uses them.
     internal readonly struct SColorRGB
     {
         internal byte R { get; }
@@ -16,10 +15,13 @@
 
         internal SColorRGB Modify(SColorModifier modifier)
         {
-            byte nr = modifier.Apply(R);
-            byte ng = modifier.Apply(G);
-            byte nb = modifier.Apply(B);
-            return new SColorRGB(nr, ng, nb);
+            byte r = R;
+            byte g = G;
+            byte b = B;
+
+            modifier.Apply(ref r, ref g, ref b);
+
+            return new SColorRGB(r, g, b);
         }
     }
 }
