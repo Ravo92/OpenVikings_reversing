@@ -1,111 +1,63 @@
-﻿using OpenVikings.Engine;
-using OpenVikings.Interfaces;
-using OpenVikings.NC2Logic;
-using OpenVikings.SystemHandles;
+﻿using OpenVikings.Dexter;
+using OpenVikings.SDL2;
+using Silk.NET.SDL;
 
-class Program
+namespace OpenVikings
 {
-    [STAThread]
-    internal static async Task Main(string[] args)
+
+    class Program
     {
-        _ = args;
-
-        // ------------------------------------------------------------
-        // Basic startup steps (folders, mutex, config)
-        // ------------------------------------------------------------
-        InitGameHandler.TryEnsureSingleInstanceOrExit(ConstantsHandler.MUTEX_NAME);
-        InitGameHandler.EnsureFoldersAndIniFiles();
-
-        EngineContext engineContext = InitGameHandler.CreateEngineContext();
-        InitGameHandler.ApplyVideoMode(engineContext);
-
-        await InitGameHandler.InitGame(engineContext);
-
-        // ------------------------------------------------------------
-        // Window & input system
-        // ------------------------------------------------------------
-        CCallbackManager callbackManager = new(maxCallbackTypes: 64);
-        LogicTickDispatcher logicTickDispatcher = new(callbackManager);
-
-        InputQueue inputQueue = new();
-        WindowHandler.AttachInputQueue(inputQueue);
-
-        InitGameHandler.InitializeWindowAndSubsystems(engineContext);
-
-        IMessagePump messagePump = new Win32MessagePump(inputQueue);
-        IMouseManager mouseManager = new BasicMouseManager();
-        IKeyManager keyManager = new BasicKeyManager();
-
-        ApplicationMessageProcessor messageProcessor = new(messagePump, inputQueue, mouseManager, keyManager);
-
-        // ------------------------------------------------------------
-        // Shared system services
-        // ------------------------------------------------------------
-        ApplicationLifecycle lifecycle = new();
-        IApplicationLifecycle appLifecycle = lifecycle;
-
-        ITimeSource timeSource = new EnvironmentTimeSource();
-        IOpenVikingsDebug debug = new OpenVikingsDebug();
-
-        // ------------------------------------------------------------
-        // Engine adapters (bridge to legacy / engine internals)
-        // ------------------------------------------------------------
-        IGuiManager guiManager = new GuiManagerAdapter();
-        IProgressBar progressBar = new ProgressBarAdapter();
-        IGameEngine gameEngine = new GameEngineAdapter();
-        IGameIo gameIo = new GameIoAdapter();
-        IAudioManager audioManager = new AudioManagerAdapter();
-        IPropertyManager propertyManager = new PropertyManagerAdapter();
-
-        // ------------------------------------------------------------
-        // State handlers
-        // ------------------------------------------------------------
-        IGameStateHandler gameStateHandler = new GameStateHandler();
-
-        IMainMenuHandler mainMenuHandler = new MainMenuHandler(
-            engineContext,
-            appLifecycle,
-            guiManager,
-            progressBar,
-            gameEngine,
-            gameIo,
-            audioManager,
-            propertyManager,
-            timeSource);
-
-        ITitleScreenHandler titleScreenHandler = new TitleScreenHandler();
-
-        MasterControlProgram masterControlProgram = new(gameStateHandler, mainMenuHandler, titleScreenHandler);
-
-        // ------------------------------------------------------------
-        // Application core
-        // ------------------------------------------------------------
-        OpenVikingsGFXSettings gfx = new()
+        [STAThread]
+        internal static int Main(string[] args)
         {
-            CallbackTimeMs = 16 // ~60 FPS
-        };
+            DexterDebug.OpenDebugFile();
+            DexterDebug.SetDebugMode(0);
 
-        OpenVikingsOsState osState = new()
-        {
-            TimeCheckResetMs = 0
-        };
+            using SDL2.SdlContext sdl = SdlBootstrap.Create("Weltwunder", 800, 600);
 
-        IOpenVikingsMain openVikingsMain = new OpenVikingsMain(messageProcessor, masterControlProgram, gfx, logicTickDispatcher);
-
-        OpenVikingsApp app = new(timeSource, new YieldRelaxer(), openVikingsMain, debug, lifecycle, gfx, osState)
-        {
-            AppContinue = true
-        };
-
-        // ------------------------------------------------------------
-        // Main loop
-        // ------------------------------------------------------------
-        while (!lifecycle.HasEnded)
-        {
-            bool keepRunning = app.MainThreadTick();
-            if (!keepRunning)
+            try
             {
-                break;
+                sdl.LogSetAllPriority(LogPriority.LogPriorityInfo);
+
+                DexterGFXState gfxState = new(renderWidth: 800, renderHeight: 600, windowWidth: 800, windowHeight: 600);
+                DexterGFXScreen gfxScreen = new(gfxState, renderBitDepth: 8, screenLocked: false);
+
+                DexterKeyTables.CreateDefault(out uint[] osKeyTranslateA, out uint[] osKeyTranslateB, out uint[] osKeyTranslateC);
+
+                OSEnvironment osEnvironment = sdl.Environment;
+
+                DexterOS dexterOs = new(osKeyTranslateA, osKeyTranslateB, osKeyTranslateC, osEnvironment, gfxState, gfxScreen);
+                dexterOs.SetCommandLineArgs(args.Length, args);
+
+                // If SignalHooks currently expects a different type, adapt it to accept SilkSdlApi or ISdlApi.
+                SignalHooks.Install(sdl.Api);
+
+                DexterApp app = new(
+                    dexterOs,
+                    osEnvironment,
+                    mainCallback: static () => { },
+                    installCallback: null,
+                    exitCallback: null,
+                    setupCallback: null,
+                    getCallbackTimeMs: null,
+                    onFpsSample: null,
+                    osUpdateCallback: static () => false);
+
+                bool ok = app.Init();
+                if (ok)
+                {
+                    sdl.SetEventEnabled(0x700u, false);
+                    sdl.SetEventEnabled(0x701u, false);
+                    sdl.SetEventEnabled(0x702u, false);
+
+                    app.DexterOSMainLoop();
+                }
+
+                return 0;
+            }
+            finally
+            {
+                DexterDebug.CloseDebugFile();
             }
         }
     }
