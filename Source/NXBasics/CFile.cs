@@ -4,8 +4,11 @@ namespace OpenVikings.NXBasics
 {
     internal sealed class CFile : IDisposable
     {
-        // this + 8 (PHYSFS_File*)
-        private IntPtr _fileHandle;
+        // Replaces: private IntPtr _fileHandle;
+        private DexterFile.FileHandle _fileHandle;
+
+        // Library support (container stream + relative addressing)
+        private long _libraryBaseOffset;
 
         // this + 0x10 (char buffer)
         private readonly byte[] _fileName;
@@ -137,14 +140,10 @@ namespace OpenVikings.NXBasics
         // NXBasics::CFile::l_InitObject()
         internal void L_InitObject()
         {
-            // ___bzero(this + 8, 0x110)
-            // We represent the region [fileHandle + fileName buffer] in managed fields.
-            _fileHandle = IntPtr.Zero;
+            _fileHandle = new DexterFile.FileHandle(0);
 
-            // Clear fileName buffer
             DexterMemory.MemorySet(_fileName, 0, _fileName.Length);
 
-            // *(undefined4 *)(this + 0x114) = 0xffffffff
             _libraryId = -1;
         }
 
@@ -153,10 +152,10 @@ namespace OpenVikings.NXBasics
         // NXBasics::CFile::Close()
         internal void Close()
         {
-            if (_fileHandle != IntPtr.Zero)
+            if (_fileHandle.IsValid)
             {
                 DexterFile.FileClose(_fileHandle);
-                _fileHandle = IntPtr.Zero;
+                _fileHandle = new DexterFile.FileHandle(0);
                 _libraryId = -1;
             }
         }
@@ -191,10 +190,10 @@ namespace OpenVikings.NXBasics
         // NXBasics::CFile::OpenForReading(bool, bool)
         internal ulong OpenForReading(bool param2)
         {
-            if (_fileHandle != IntPtr.Zero)
+            if (_fileHandle.IsValid)
             {
                 DexterFile.FileClose(_fileHandle);
-                _fileHandle = IntPtr.Zero;
+                _fileHandle = new DexterFile.FileHandle(0);
                 _libraryId = -1;
             }
 
@@ -217,10 +216,12 @@ namespace OpenVikings.NXBasics
                 uVar4 = 0;
             }
 
-            if (DexterFile.FileExists(_fileName, uVar4))
+            string nameAsString = DexterString.StringToString(_fileName);
+
+            if (DexterFile.FileExists(nameAsString, uVar4))
             {
-                _fileHandle = DexterFile.FileOpen(_fileName, uVar4);
-                if (_fileHandle != IntPtr.Zero)
+                _fileHandle = DexterFile.FileOpen(nameAsString, uVar4);
+                if (_fileHandle.IsValid)
                 {
                     return 1;
                 }
@@ -229,10 +230,11 @@ namespace OpenVikings.NXBasics
             if (!bVar2)
             {
                 uVar4 = (byte)(uVar4 + 0xE0);
-                if (DexterFile.FileExists(_fileName, uVar4))
+
+                if (DexterFile.FileExists(nameAsString, uVar4))
                 {
-                    _fileHandle = DexterFile.FileOpen(_fileName, uVar4);
-                    if (_fileHandle != IntPtr.Zero)
+                    _fileHandle = DexterFile.FileOpen(nameAsString, uVar4);
+                    if (_fileHandle.IsValid)
                     {
                         return 1;
                     }
@@ -244,8 +246,6 @@ namespace OpenVikings.NXBasics
                 if (param2)
                 {
                     byte[] original = new byte[0x110];
-
-                    // FIX: copy current filename -> original
                     Buffer.BlockCopy(_fileName, 0, original, 0, _fileName.Length);
 
                     if (TryOpenWithAdditionalLoadPaths(uVar4, original))
@@ -283,10 +283,12 @@ namespace OpenVikings.NXBasics
             DexterString.StringCopy(_fileName, prefix);
             DexterString.StringAttach(_fileName, fileNameBytes);
 
-            if (DexterFile.FileExists(_fileName, mode))
+            string combined = DexterString.StringToString(_fileName);
+
+            if (DexterFile.FileExists(combined, mode))
             {
-                _fileHandle = DexterFile.FileOpen(_fileName, mode);
-                return _fileHandle != IntPtr.Zero;
+                _fileHandle = DexterFile.FileOpen(combined, mode);
+                return _fileHandle.IsValid;
             }
 
             return false;
@@ -329,20 +331,20 @@ namespace OpenVikings.NXBasics
 
             if (library.File == null)
             {
-                _fileHandle = IntPtr.Zero;
+                _fileHandle = new DexterFile.FileHandle(0);
                 return false;
             }
 
-            byte[] libraryContainerPath = library.File.GetFileNameBytesNullTerminated();
+            string libraryContainerPath = DexterString.StringToString(library.File.GetFileNameBytesNullTerminated());
 
             if (!DexterFile.FileExists(libraryContainerPath, mode))
             {
-                _fileHandle = IntPtr.Zero;
+                _fileHandle = new DexterFile.FileHandle(0);
                 return false;
             }
 
             _fileHandle = DexterFile.FileOpen(libraryContainerPath, mode);
-            if (_fileHandle == IntPtr.Zero)
+            if (!_fileHandle.IsValid)
             {
                 return false;
             }
@@ -353,7 +355,6 @@ namespace OpenVikings.NXBasics
             _libraryId = libraryIndex;
             return true;
         }
-
 
         private static CSimpleFileLibrary GetLibraryByIndex(int index)
         {
@@ -368,40 +369,45 @@ namespace OpenVikings.NXBasics
         // NXBasics::CFile::SeekToPosition(unsigned int)
         internal void SeekToPosition(int position)
         {
-            if (_fileHandle != IntPtr.Zero)
+            if (!_fileHandle.IsValid)
             {
-                if (_libraryId != -1)
-                {
-                    CSimpleFileLibrary lib = GetLibraryByIndex(_libraryId);
-                    if (lib != null)
-                    {
-                        int offset = CSimpleFileLibrary.GetFileInLibraryPosition(lib, _fileName);
-                        position += offset;
-                    }
-                }
-
-                DexterFile.FileSeek(_fileHandle, position, 0);
+                return;
             }
+
+            if (_libraryId != -1)
+            {
+                CSimpleFileLibrary lib = GetLibraryByIndex(_libraryId);
+                if (lib != null)
+                {
+                    int offset = CSimpleFileLibrary.GetFileInLibraryPosition(lib, _fileName);
+                    position += offset;
+                }
+            }
+
+            DexterFile.FileSeek(_fileHandle, position, 0);
         }
+
 
         // NXBasics::CFile::OpenForWriting(bool)
         internal bool OpenForWriting()
         {
-            if (_fileHandle != IntPtr.Zero)
+            if (_fileHandle.IsValid)
             {
                 DexterFile.FileClose(_fileHandle);
-                _fileHandle = IntPtr.Zero;
+                _fileHandle = new DexterFile.FileHandle(0);
                 _libraryId = -1;
             }
 
-            _fileHandle = DexterFile.FileOpen(_fileName, (byte)'!');
-            return _fileHandle != IntPtr.Zero;
+            string nameAsString = DexterString.StringToString(_fileName);
+
+            _fileHandle = DexterFile.FileOpen(nameAsString, (byte)'!');
+            return _fileHandle.IsValid;
         }
 
         // NXBasics::CFile::ReadLong()
         internal uint ReadLong()
         {
-            if (_fileHandle == nint.Zero)
+            if (!_fileHandle.IsValid)
             {
                 return 0;
             }
@@ -412,7 +418,7 @@ namespace OpenVikings.NXBasics
         // NXBasics::CFile::ReadWord()
         internal ushort ReadWord()
         {
-            if (_fileHandle == nint.Zero)
+            if (!_fileHandle.IsValid)
             {
                 return 0;
             }
@@ -423,7 +429,7 @@ namespace OpenVikings.NXBasics
         // Mirrors: NXBasics::CFile::Read(void*, unsigned int)
         internal int Read(byte[] buffer, int size)
         {
-            if (_fileHandle == IntPtr.Zero)
+            if (!_fileHandle.IsValid)
             {
                 return 0;
             }
@@ -434,7 +440,7 @@ namespace OpenVikings.NXBasics
         // Managed helper (not in original): read into buffer starting at offset
         internal int ReadInto(byte[] buffer, int bufferOffset, int size)
         {
-            if (_fileHandle == IntPtr.Zero)
+            if (!_fileHandle.IsValid)
             {
                 return 0;
             }
@@ -454,10 +460,38 @@ namespace OpenVikings.NXBasics
             return DexterFile.FileRead(_fileHandle, buffer, bufferOffset, size, 0);
         }
 
+        private static bool TryReadExact(Stream stream, int size, out byte[] buffer)
+        {
+            buffer = new byte[size];
+
+            int readTotal = 0;
+            while (readTotal < size)
+            {
+                int read;
+                try
+                {
+                    read = stream.Read(buffer, readTotal, size - readTotal);
+                }
+                catch
+                {
+                    return false;
+                }
+
+                if (read <= 0)
+                {
+                    return false;
+                }
+
+                readTotal += read;
+            }
+
+            return true;
+        }
+
         // NXBasics::CFile::WriteLong(unsigned int)
         internal void WriteLong(uint value)
         {
-            if (_fileHandle == nint.Zero)
+            if (!_fileHandle.IsValid)
             {
                 return;
             }
@@ -468,7 +502,7 @@ namespace OpenVikings.NXBasics
         // NXBasics::CFile::WriteWord(unsigned short)
         internal void WriteWord(ushort value)
         {
-            if (_fileHandle == nint.Zero)
+            if (!_fileHandle.IsValid)
             {
                 return;
             }
@@ -479,29 +513,30 @@ namespace OpenVikings.NXBasics
         // NXBasics::CFile::Write(void const*, unsigned int)
         internal void Write(byte[] buffer, int size)
         {
-            if (_fileHandle == IntPtr.Zero)
+            if (!_fileHandle.IsValid)
             {
                 return;
             }
 
-            DexterFile.FileWrite(_fileHandle, buffer, 0, size);
+            _ = DexterFile.FileWrite(_fileHandle, buffer, 0, size);
         }
 
         // Managed helper: write a single byte
         internal void WriteByte(byte value)
         {
-            if (_fileHandle == IntPtr.Zero)
+            if (!_fileHandle.IsValid)
             {
                 return;
             }
 
-            DexterFile.FileWrite(_fileHandle, ref value, 1);
+            byte b = value;
+            _ = DexterFile.FileWrite(_fileHandle, ref b, 1);
         }
 
         // Managed helper: write buffer region starting at offset
         internal void Write(byte[] buffer, int bufferOffset, int size)
         {
-            if (_fileHandle == IntPtr.Zero)
+            if (!_fileHandle.IsValid)
             {
                 return;
             }
@@ -523,48 +558,51 @@ namespace OpenVikings.NXBasics
                 return;
             }
 
-            // DexterFile.FileWrite uses (buffer, offset, size)
-            DexterFile.FileWrite(_fileHandle, buffer, bufferOffset, size);
+            _ = DexterFile.FileWrite(_fileHandle, buffer, bufferOffset, size);
         }
 
         // NXBasics::CFile::ReadFlag(bool&)
         internal void ReadFlag(out bool value)
         {
-            if (_fileHandle == IntPtr.Zero)
+            if (!_fileHandle.IsValid)
             {
                 value = false;
                 return;
             }
 
             byte b = 0;
-            DexterFile.FileRead(_fileHandle, ref b, 1, 0);
+            _ = DexterFile.FileRead(_fileHandle, ref b, 1, 0);
             value = b != 0;
         }
 
         // NXBasics::CFile::WriteTrueFlag()
         internal void WriteTrueFlag()
         {
-            byte b = 1;
-            if (_fileHandle != IntPtr.Zero)
+            if (!_fileHandle.IsValid)
             {
-                DexterFile.FileWrite(_fileHandle, ref b, 1);
+                return;
             }
+
+            byte b = 1;
+            _ = DexterFile.FileWrite(_fileHandle, ref b, 1);
         }
 
         // NXBasics::CFile::WriteFalseFlag()
         internal void WriteFalseFlag()
         {
-            byte b = 0;
-            if (_fileHandle != IntPtr.Zero)
+            if (!_fileHandle.IsValid)
             {
-                DexterFile.FileWrite(_fileHandle, ref b, 1);
+                return;
             }
+
+            byte b = 0;
+            _ = DexterFile.FileWrite(_fileHandle, ref b, 1);
         }
 
         // NXBasics::CFile::GetPosition() const
         internal int GetPosition()
         {
-            if (_fileHandle == IntPtr.Zero)
+            if (!_fileHandle.IsValid)
             {
                 return 0;
             }
@@ -587,7 +625,7 @@ namespace OpenVikings.NXBasics
         // NXBasics::CFile::GetSize() const
         internal ulong GetSize()
         {
-            if (_fileHandle == IntPtr.Zero)
+            if (!_fileHandle.IsValid)
             {
                 return 0;
             }
@@ -608,9 +646,9 @@ namespace OpenVikings.NXBasics
         internal bool IsEndOfFileReached()
         {
             int pos = GetPosition();
-            int size = 0;
+            int size;
 
-            if (_fileHandle == IntPtr.Zero)
+            if (!_fileHandle.IsValid)
             {
                 size = 0;
             }
@@ -618,14 +656,20 @@ namespace OpenVikings.NXBasics
             {
                 if (_libraryId == -1)
                 {
-                    size = DexterFile.FileSize(_fileHandle);
+                    ulong len = GetSize();
+                    size = len > int.MaxValue ? int.MaxValue : (int)len;
                 }
                 else
                 {
                     CSimpleFileLibrary lib = GetLibraryByIndex(_libraryId);
                     if (lib != null)
                     {
-                        size = (int)CSimpleFileLibrary.GetFileSize(lib, _fileName);
+                        ulong len = CSimpleFileLibrary.GetFileSize(lib, _fileName);
+                        size = len > int.MaxValue ? int.MaxValue : (int)len;
+                    }
+                    else
+                    {
+                        size = 0;
                     }
                 }
             }

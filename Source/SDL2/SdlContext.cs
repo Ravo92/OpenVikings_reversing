@@ -4,6 +4,10 @@ namespace OpenVikings.SDL2
 {
     internal sealed class SdlContext : IDisposable
     {
+        private const int SdlQuery = -1;
+        private const int SdlDisable = 0;
+        private const int SdlEnable = 1;
+
         private readonly Sdl _sdl;
         private readonly nint _windowHandle;
 
@@ -25,6 +29,8 @@ namespace OpenVikings.SDL2
             {
                 SetRelativeMouseMode(false);
             }
+
+            ShowMousePointer();
 
             DestroyWindow();
             _sdl.Quit();
@@ -48,6 +54,22 @@ namespace OpenVikings.SDL2
         internal void SetRelativeMouseMode(bool enabled)
         {
             _sdl.SetRelativeMouseMode(enabled ? SdlBool.True : SdlBool.False);
+        }
+
+        internal bool IsMousePointerVisible()
+        {
+            int state = _sdl.ShowCursor(SdlQuery);
+            return state == SdlEnable;
+        }
+
+        internal void HideMousePointer()
+        {
+            _sdl.ShowCursor(SdlDisable);
+        }
+
+        internal void ShowMousePointer()
+        {
+            _sdl.ShowCursor(SdlEnable);
         }
 
         private unsafe void DestroyWindow()

@@ -10,6 +10,7 @@
 
         private readonly DexterOS _os;
         private readonly OSEnvironment _osEnvironment;
+        private readonly DexterGFX _gfx;
 
         // External hooks (original: DexterMain, DexterAppInstall, DexterAppExit, DexterAppSetup, OSUpdate).
         private readonly VoidCallback _mainCallback;
@@ -20,6 +21,11 @@
         private readonly IntCallback? _getCallbackTimeMs;
         private readonly VoidCallback? _onFpsSample;
         private readonly BoolCallback? _osUpdateCallback;
+
+        // Optional hooks to match original shutdown/update behavior without hard dependencies.
+        private readonly VoidCallback? _soundUpdateCallback;
+        private readonly VoidCallback? _soundShutDownCallback;
+        private readonly VoidCallback? _gfxShutDownCallback;
 
         private bool _dexterActive;
         internal bool AppContinue { get; private set; }
@@ -51,13 +57,15 @@
         private ZoneEntry[]? _zones;
         private short _maxZones;
 
-        internal DexterApp(DexterOS os, OSEnvironment osEnvironment, VoidCallback mainCallback, BoolCallback? installCallback, BoolCallback? exitCallback, BoolCallback? setupCallback, IntCallback? getCallbackTimeMs, VoidCallback? onFpsSample, BoolCallback? osUpdateCallback)
+        internal DexterApp(DexterOS os, DexterGFX gfx, OSEnvironment osEnvironment, VoidCallback mainCallback, BoolCallback? installCallback, BoolCallback? exitCallback, BoolCallback? setupCallback, IntCallback? getCallbackTimeMs, VoidCallback? onFpsSample, BoolCallback? osUpdateCallback)
         {
             ArgumentNullException.ThrowIfNull(os);
+            ArgumentNullException.ThrowIfNull(gfx);
             ArgumentNullException.ThrowIfNull(osEnvironment);
             ArgumentNullException.ThrowIfNull(mainCallback);
 
             _os = os;
+            _gfx = gfx;
             _osEnvironment = osEnvironment;
 
             _mainCallback = mainCallback;
@@ -80,19 +88,16 @@
             _randomStack = new RandomState[4];
             _randomStackPos = 0;
 
-            // RANMAR defaults (match classic published constants)
             _cd = 7654321.0 / 16777216.0;
             _cm = 16777213.0 / 16777216.0;
 
-            // Constructor in the original initializes a deterministic starting state.
             Randomize(0);
         }
 
         // DexterApp::Init()
         internal bool Init()
         {
-            // App metadata (original used DexterString::StringCopy + static globals).
-            _os.SetAppTitle("Dexter Application", "DexterApp");
+            DexterAppConfig();
 
             bool ok = _os.OSInit();
             if (!ok)
@@ -146,28 +151,59 @@
                 return;
             }
 
-            // Original ended threads 1..4 and shut down gfx + audio.
-            // In managed code, threads are cooperative and released by DexterOS.
-            _os.ThreadRelease(1);
-            _os.ThreadRelease(2);
-            _os.ThreadRelease(3);
-            _os.ThreadRelease(4);
+            // Original: ThreadEnd(1..4) then GFXShutDown + SoundShutDown.
+            _os.ThreadEnd(1);
+            _os.ThreadEnd(2);
+            _os.ThreadEnd(3);
+            _os.ThreadEnd(4);
+
+            _gfxShutDownCallback?.Invoke();
+
+            _soundShutDownCallback?.Invoke();
 
             _dexterActive = false;
+        }
+
+        // DexterApp::DexterAppConfig()
+        internal void DexterAppConfig()
+        {
+            string appDataPath = Environment.CurrentDirectory;
+            DexterFile.SetStoragePath(appDataPath);
+
+            _gfx.SetAppRefresh(0x28);
+            _gfx.HideMousePointer();
+
+            bool english = false; // OSGeneric.IsEnglish();
+            string title = english ? "Cultures: 8th Wonder of the World" : "Cultures: Das Achte Weltwunder";
+            _os.SetAppTitle(title, title);
+
+            DexterDebug.SetDebugMode(0);
+            DexterMemory.SetMaxMallocs(10000);
+            // DexterAudio.SetSoundMode(0x02, 0x10, 0x5622);
+            DexterFile.SetFileBufferSize(10000);
         }
 
         // DexterApp::DexterCleanUp()
         internal void DexterCleanUp()
         {
+            // Original: DexterAppExit callback.
             _exitCallback?.Invoke();
 
+            // Original: free Zone[] and reset MaxZones.
             _zones = null;
             _maxZones = 0;
+
+            // Original: DexterFile::FileSystemShutDown(); (not present in current C# set)
+            // If a managed filesystem subsystem exists, it should be shut down here.
 
             DexterMemory.MemorySystemShutDown();
             DexterMemory.FreeHeap();
 
+            // Original: DexterOS::ThreadRelease(0); (ensure 0 is actually handled in DexterOS)
             _os.ThreadRelease(0);
+
+            // Original: OSGeneric::CleanUp(); (not present in current C# set)
+            // If an OSGeneric cleanup exists, it should be called here.
         }
 
         // DexterApp::DexterOSMain()
@@ -180,6 +216,9 @@
                 bool processedEvent = _osUpdateCallback != null && _osUpdateCallback();
                 if (!processedEvent)
                 {
+                    // Original: DexterAudio::SoundUpdate();
+                    _soundUpdateCallback?.Invoke();
+
                     MainThreadTick();
                 }
             }

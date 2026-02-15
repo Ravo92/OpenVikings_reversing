@@ -1,4 +1,6 @@
-﻿namespace OpenVikings.Dexter
+﻿using System.Text;
+
+namespace OpenVikings.Dexter
 {
     internal static partial class DexterString
     {
@@ -463,6 +465,27 @@
             }
 
             return value;
+        }
+
+        internal static string StringToString(byte[] bytes)
+        {
+            if (bytes == null || bytes.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            int len = 0;
+            while (len < bytes.Length && bytes[len] != 0)
+            {
+                len++;
+            }
+
+            if (len == 0)
+            {
+                return string.Empty;
+            }
+
+            return Encoding.UTF8.GetString(bytes, 0, len);
         }
     }
 }

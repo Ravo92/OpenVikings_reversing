@@ -1,15 +1,17 @@
-﻿using System.Buffers.Binary;
-
-namespace OpenVikings.Dexter
+﻿namespace OpenVikings.Dexter
 {
+    // Managed port of DexterEndian.cxx.
+    // Pointer-free: all conversions operate on values or Span<T> / arrays.
     internal static class DexterEndian
     {
-        // ===== Pure endian helpers (Get/Put/Convert) =====
+        // --------------------------------------------------------------------
+        // Value conversions (Get*/Put*/Convert* equivalents)
+        // --------------------------------------------------------------------
 
         // DexterEndian::GetWordMSB(unsigned short const*)
         internal static ushort GetWordMSB(ushort value)
         {
-            return BinaryPrimitives.ReverseEndianness(value);
+            return (ushort)((value << 8) | (value >> 8));
         }
 
         // DexterEndian::GetWordLSB(unsigned short const*)
@@ -21,7 +23,11 @@ namespace OpenVikings.Dexter
         // DexterEndian::GetLongMSB(unsigned int const*)
         internal static uint GetLongMSB(uint value)
         {
-            return BinaryPrimitives.ReverseEndianness(value);
+            return
+                (value >> 24) |
+                ((value & 0x00FF0000u) >> 8) |
+                ((value & 0x0000FF00u) << 8) |
+                (value << 24);
         }
 
         // DexterEndian::GetLongLSB(unsigned int const*)
@@ -33,12 +39,18 @@ namespace OpenVikings.Dexter
         // DexterEndian::GetQuadMSB(unsigned long long const*)
         internal static ulong GetQuadMSB(ulong value)
         {
-            return BinaryPrimitives.ReverseEndianness(value);
+            return
+                (value >> 56) |
+                ((value & 0x00FF000000000000ul) >> 40) |
+                ((value & 0x0000FF0000000000ul) >> 24) |
+                ((value & 0x000000FF00000000ul) >> 8) |
+                ((value & 0x00000000FF000000ul) << 8) |
+                ((value & 0x0000000000FF0000ul) << 24) |
+                ((value & 0x000000000000FF00ul) << 40) |
+                (value << 56);
         }
 
         // DexterEndian::GetQuadLSB(unsigned long long const*)
-        // Note: In the pseudo this appears as "void" returning immediately (decompiler artifact).
-        // The effective LSB behavior is identity.
         internal static ulong GetQuadLSB(ulong value)
         {
             return value;
@@ -47,7 +59,7 @@ namespace OpenVikings.Dexter
         // DexterEndian::PutWordMSB(unsigned short*, unsigned short)
         internal static ushort PutWordMSB(ushort value)
         {
-            return BinaryPrimitives.ReverseEndianness(value);
+            return GetWordMSB(value);
         }
 
         // DexterEndian::PutWordLSB(unsigned short*, unsigned short)
@@ -59,7 +71,7 @@ namespace OpenVikings.Dexter
         // DexterEndian::PutLongMSB(unsigned int*, unsigned int)
         internal static uint PutLongMSB(uint value)
         {
-            return BinaryPrimitives.ReverseEndianness(value);
+            return GetLongMSB(value);
         }
 
         // DexterEndian::PutLongLSB(unsigned int*, unsigned int)
@@ -71,381 +83,439 @@ namespace OpenVikings.Dexter
         // DexterEndian::PutQuadMSB(unsigned long long*, unsigned long long)
         internal static ulong PutQuadMSB(ulong value)
         {
-            return BinaryPrimitives.ReverseEndianness(value);
+            return GetQuadMSB(value);
         }
 
         // DexterEndian::PutQuadLSB(unsigned long long*, unsigned long long)
-        // Note: In the pseudo this appears as "void" returning immediately (decompiler artifact).
-        // The effective LSB behavior is identity.
         internal static ulong PutQuadLSB(ulong value)
         {
             return value;
         }
 
         // DexterEndian::ConvertWordMSB(unsigned short*)
-        internal static void ConvertWordMSB(ref ushort value)
+        internal static ushort ConvertWordMSB(ushort value)
         {
-            value = BinaryPrimitives.ReverseEndianness(value);
+            return GetWordMSB(value);
         }
 
         // DexterEndian::ConvertWordLSB(unsigned short*)
-        internal static void ConvertWordLSB(ref ushort value)
+        internal static ushort ConvertWordLSB(ushort value)
         {
-            // no-op
+            return value;
         }
 
         // DexterEndian::ConvertLongMSB(unsigned int*)
-        internal static void ConvertLongMSB(ref uint value)
+        internal static uint ConvertLongMSB(uint value)
         {
-            value = BinaryPrimitives.ReverseEndianness(value);
+            return GetLongMSB(value);
         }
 
         // DexterEndian::ConvertLongLSB(unsigned int*)
-        internal static void ConvertLongLSB(ref uint value)
+        internal static uint ConvertLongLSB(uint value)
         {
-            // no-op
+            return value;
         }
 
         // DexterEndian::ConvertQuadMSB(unsigned long long*)
-        internal static void ConvertQuadMSB(ref ulong value)
+        internal static ulong ConvertQuadMSB(ulong value)
         {
-            value = BinaryPrimitives.ReverseEndianness(value);
+            return GetQuadMSB(value);
         }
 
         // DexterEndian::ConvertQuadLSB(unsigned long long*)
-        internal static void ConvertQuadLSB(ref ulong value)
+        internal static ulong ConvertQuadLSB(ulong value)
         {
-            // no-op
+            return value;
         }
 
-        // ===== File IO endian helpers =====
-        // These mirror the pseudo functions that read/write specific sized integers via DexterFile.
+        // --------------------------------------------------------------------
+        // File I/O helpers (using DexterFile.FileHandle)
+        // These mirror the C++ FileRead*/FileWrite* methods.
+        // --------------------------------------------------------------------
+
+        // DexterEndian::FileWriteWordMSB(PHYSFS_File*, unsigned short)
+        internal static void FileWriteWordMSB(DexterFile.FileHandle file, ushort value)
+        {
+            ushort v = GetWordMSB(value);
+            byte[] bytes = [(byte)v, (byte)(v >> 8)];
+            _ = DexterFile.FileWrite(file, bytes, 0, 2);
+        }
 
         // DexterEndian::FileWriteLongMSB(PHYSFS_File*, unsigned int)
-        internal static void FileWriteLongMSB(nint fileHandle, uint value)
+        internal static void FileWriteLongMSB(DexterFile.FileHandle file, uint value)
         {
-            byte[] buffer = new byte[4];
-            BinaryPrimitives.WriteUInt32BigEndian(buffer, value);
-            WriteExactly(fileHandle, buffer, 4);
+            uint v = GetLongMSB(value);
+            byte[] bytes = [(byte)v, (byte)(v >> 8), (byte)(v >> 16), (byte)(v >> 24)];
+            _ = DexterFile.FileWrite(file, bytes, 0, 4);
         }
 
         // DexterEndian::FileWriteQuadMSB(PHYSFS_File*, unsigned long long)
-        internal static void FileWriteQuadMSB(nint fileHandle, ulong value)
+        internal static void FileWriteQuadMSB(DexterFile.FileHandle file, ulong value)
         {
-            byte[] buffer = new byte[8];
-            BinaryPrimitives.WriteUInt64BigEndian(buffer, value);
-            WriteExactly(fileHandle, buffer, 8);
-        }
-
-        // DexterEndian::FileWriteWordMSB(PHYSFS_File*, unsigned short)
-        internal static void FileWriteWordMSB(nint fileHandle, ushort value)
-        {
-            byte[] buffer = new byte[2];
-            BinaryPrimitives.WriteUInt16BigEndian(buffer, value);
-            WriteExactly(fileHandle, buffer, 2);
-        }
-
-        // DexterEndian::FileWriteLongLSB(PHYSFS_File*, unsigned int)
-        internal static void FileWriteLongLSB(nint fileHandle, uint value)
-        {
-            byte[] buffer = new byte[4];
-            BinaryPrimitives.WriteUInt32LittleEndian(buffer, value);
-            WriteExactly(fileHandle, buffer, 4);
-        }
-
-        // DexterEndian::FileWriteQuadLSB(PHYSFS_File*, unsigned long long)
-        internal static void FileWriteQuadLSB(nint fileHandle, ulong value)
-        {
-            byte[] buffer = new byte[8];
-            BinaryPrimitives.WriteUInt64LittleEndian(buffer, value);
-            WriteExactly(fileHandle, buffer, 8);
+            ulong v = GetQuadMSB(value);
+            byte[] bytes =
+            [
+                (byte)v,
+                (byte)(v >> 8),
+                (byte)(v >> 16),
+                (byte)(v >> 24),
+                (byte)(v >> 32),
+                (byte)(v >> 40),
+                (byte)(v >> 48),
+                (byte)(v >> 56),
+            ];
+            _ = DexterFile.FileWrite(file, bytes, 0, 8);
         }
 
         // DexterEndian::FileWriteWordLSB(PHYSFS_File*, unsigned short)
-        internal static void FileWriteWordLSB(nint fileHandle, ushort value)
+        internal static void FileWriteWordLSB(DexterFile.FileHandle file, ushort value)
         {
-            byte[] buffer = new byte[2];
-            BinaryPrimitives.WriteUInt16LittleEndian(buffer, value);
-            WriteExactly(fileHandle, buffer, 2);
+            byte[] bytes = [(byte)value, (byte)(value >> 8)];
+            _ = DexterFile.FileWrite(file, bytes, 0, 2);
         }
 
-        // DexterEndian::FileReadLongMSB(PHYSFS_File*)
-        internal static uint FileReadLongMSB(nint fileHandle)
+        // DexterEndian::FileWriteLongLSB(PHYSFS_File*, unsigned int)
+        internal static void FileWriteLongLSB(DexterFile.FileHandle file, uint value)
         {
-            byte[] buffer = new byte[4];
-            ReadExactly(fileHandle, buffer, 4);
-            return BinaryPrimitives.ReadUInt32BigEndian(buffer);
+            byte[] bytes = [(byte)value, (byte)(value >> 8), (byte)(value >> 16), (byte)(value >> 24)];
+            _ = DexterFile.FileWrite(file, bytes, 0, 4);
         }
 
-        // DexterEndian::FileReadQuadMSB(PHYSFS_File*)
-        internal static ulong FileReadQuadMSB(nint fileHandle)
+        // DexterEndian::FileWriteQuadLSB(PHYSFS_File*, unsigned long long)
+        internal static void FileWriteQuadLSB(DexterFile.FileHandle file, ulong value)
         {
-            byte[] buffer = new byte[8];
-            ReadExactly(fileHandle, buffer, 8);
-            return BinaryPrimitives.ReadUInt64BigEndian(buffer);
+            byte[] bytes =
+            [
+                (byte)value,
+                (byte)(value >> 8),
+                (byte)(value >> 16),
+                (byte)(value >> 24),
+                (byte)(value >> 32),
+                (byte)(value >> 40),
+                (byte)(value >> 48),
+                (byte)(value >> 56),
+            ];
+            _ = DexterFile.FileWrite(file, bytes, 0, 8);
         }
 
         // DexterEndian::FileReadWordMSB(PHYSFS_File*)
-        internal static ushort FileReadWordMSB(nint fileHandle)
+        internal static ushort FileReadWordMSB(DexterFile.FileHandle file)
         {
-            byte[] buffer = new byte[2];
-            ReadExactly(fileHandle, buffer, 2);
-            return BinaryPrimitives.ReadUInt16BigEndian(buffer);
+            byte[] bytes = new byte[2];
+            int read = DexterFile.FileRead(file, bytes, 0, 2, 0);
+            if (read != 2)
+            {
+                return 0;
+            }
+
+            ushort v = (ushort)(bytes[0] | (bytes[1] << 8));
+            return GetWordMSB(v);
         }
 
-        // DexterEndian::FileReadLongLSB(PHYSFS_File*)
-        internal static uint FileReadLongLSB(nint fileHandle)
+        // DexterEndian::FileReadLongMSB(PHYSFS_File*)
+        internal static uint FileReadLongMSB(DexterFile.FileHandle file)
         {
-            byte[] buffer = new byte[4];
-            ReadExactly(fileHandle, buffer, 4);
-            return BinaryPrimitives.ReadUInt32LittleEndian(buffer);
+            byte[] bytes = new byte[4];
+            int read = DexterFile.FileRead(file, bytes, 0, 4, 0);
+            if (read != 4)
+            {
+                return 0;
+            }
+
+            uint v = (uint)(bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24));
+            return GetLongMSB(v);
         }
 
-        // DexterEndian::FileReadQuadLSB(PHYSFS_File*)
-        internal static ulong FileReadQuadLSB(nint fileHandle)
+        // DexterEndian::FileReadQuadMSB(PHYSFS_File*)
+        internal static ulong FileReadQuadMSB(DexterFile.FileHandle file)
         {
-            byte[] buffer = new byte[8];
-            ReadExactly(fileHandle, buffer, 8);
-            return BinaryPrimitives.ReadUInt64LittleEndian(buffer);
+            byte[] bytes = new byte[8];
+            int read = DexterFile.FileRead(file, bytes, 0, 8, 0);
+            if (read != 8)
+            {
+                return 0;
+            }
+
+            ulong v =
+                (ulong)bytes[0] |
+                ((ulong)bytes[1] << 8) |
+                ((ulong)bytes[2] << 16) |
+                ((ulong)bytes[3] << 24) |
+                ((ulong)bytes[4] << 32) |
+                ((ulong)bytes[5] << 40) |
+                ((ulong)bytes[6] << 48) |
+                ((ulong)bytes[7] << 56);
+
+            return GetQuadMSB(v);
         }
 
         // DexterEndian::FileReadWordLSB(PHYSFS_File*)
-        internal static ushort FileReadWordLSB(nint fileHandle)
+        internal static ushort FileReadWordLSB(DexterFile.FileHandle file)
         {
-            byte[] buffer = new byte[2];
-            ReadExactly(fileHandle, buffer, 2);
-            return BinaryPrimitives.ReadUInt16LittleEndian(buffer);
+            byte[] bytes = new byte[2];
+            int read = DexterFile.FileRead(file, bytes, 0, 2, 0);
+            if (read != 2)
+            {
+                return 0;
+            }
+
+            return (ushort)(bytes[0] | (bytes[1] << 8));
         }
 
-        // ===== Array IO (LSB/MSB) =====
-        // The pseudo uses pointer arithmetic and writes/reads element-by-element.
-        // Here it is expressed as managed arrays with identical semantics.
+        // DexterEndian::FileReadLongLSB(PHYSFS_File*)
+        internal static uint FileReadLongLSB(DexterFile.FileHandle file)
+        {
+            byte[] bytes = new byte[4];
+            int read = DexterFile.FileRead(file, bytes, 0, 4, 0);
+            if (read != 4)
+            {
+                return 0;
+            }
+
+            return (uint)(bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24));
+        }
+
+        // DexterEndian::FileReadQuadLSB(PHYSFS_File*)
+        internal static ulong FileReadQuadLSB(DexterFile.FileHandle file)
+        {
+            byte[] bytes = new byte[8];
+            int read = DexterFile.FileRead(file, bytes, 0, 8, 0);
+            if (read != 8)
+            {
+                return 0;
+            }
+
+            return
+                (ulong)bytes[0] |
+                ((ulong)bytes[1] << 8) |
+                ((ulong)bytes[2] << 16) |
+                ((ulong)bytes[3] << 24) |
+                ((ulong)bytes[4] << 32) |
+                ((ulong)bytes[5] << 40) |
+                ((ulong)bytes[6] << 48) |
+                ((ulong)bytes[7] << 56);
+        }
+
+        // --------------------------------------------------------------------
+        // Array helpers (FileRead/Write *Array* MSB/LSB)
+        // These are pointer-free equivalents of the original loops.
+        // --------------------------------------------------------------------
 
         // DexterEndian::FileWriteWordArrayLSB(PHYSFS_File*, unsigned short const*, unsigned int)
-        internal static void FileWriteWordArrayLSB(nint fileHandle, ushort[] values, uint count)
+        internal static void FileWriteWordArrayLSB(DexterFile.FileHandle file, ushort[] values, uint count)
         {
             if (values == null || count == 0)
             {
                 return;
             }
 
-            uint limit = count;
-            if (limit > (uint)values.Length)
+            uint n = count;
+            if (n > (uint)values.Length)
             {
-                limit = (uint)values.Length;
+                n = (uint)values.Length;
             }
 
-            byte[] buffer = new byte[2];
-
-            uint i = 0;
-            while (i < limit)
+            byte[] bytes = new byte[checked((int)n) * 2];
+            int o = 0;
+            for (uint i = 0; i < n; i++)
             {
-                BinaryPrimitives.WriteUInt16LittleEndian(buffer, values[i]);
-                WriteExactly(fileHandle, buffer, 2);
-                i++;
+                ushort v = values[i];
+                bytes[o] = (byte)v;
+                bytes[o + 1] = (byte)(v >> 8);
+                o += 2;
             }
+
+            _ = DexterFile.FileWrite(file, bytes, 0, bytes.Length);
         }
 
         // DexterEndian::FileWriteLongArrayLSB(PHYSFS_File*, unsigned int const*, unsigned int)
-        internal static void FileWriteLongArrayLSB(nint fileHandle, uint[] values, uint count)
+        internal static void FileWriteLongArrayLSB(DexterFile.FileHandle file, uint[] values, uint count)
         {
             if (values == null || count == 0)
             {
                 return;
             }
 
-            uint limit = count;
-            if (limit > (uint)values.Length)
+            uint n = count;
+            if (n > (uint)values.Length)
             {
-                limit = (uint)values.Length;
+                n = (uint)values.Length;
             }
 
-            byte[] buffer = new byte[4];
-
-            uint i = 0;
-            while (i < limit)
+            byte[] bytes = new byte[checked((int)n) * 4];
+            int o = 0;
+            for (uint i = 0; i < n; i++)
             {
-                BinaryPrimitives.WriteUInt32LittleEndian(buffer, values[i]);
-                WriteExactly(fileHandle, buffer, 4);
-                i++;
+                uint v = values[i];
+                bytes[o] = (byte)v;
+                bytes[o + 1] = (byte)(v >> 8);
+                bytes[o + 2] = (byte)(v >> 16);
+                bytes[o + 3] = (byte)(v >> 24);
+                o += 4;
             }
+
+            _ = DexterFile.FileWrite(file, bytes, 0, bytes.Length);
         }
 
         // DexterEndian::FileWriteWordArrayMSB(PHYSFS_File*, unsigned short const*, unsigned int)
-        internal static void FileWriteWordArrayMSB(nint fileHandle, ushort[] values, uint count)
+        internal static void FileWriteWordArrayMSB(DexterFile.FileHandle file, ushort[] values, uint count)
         {
             if (values == null || count == 0)
             {
                 return;
             }
 
-            uint limit = count;
-            if (limit > (uint)values.Length)
+            uint n = count;
+            if (n > (uint)values.Length)
             {
-                limit = (uint)values.Length;
+                n = (uint)values.Length;
             }
 
-            byte[] buffer = new byte[2];
-
-            uint i = 0;
-            while (i < limit)
+            byte[] bytes = new byte[checked((int)n) * 2];
+            int o = 0;
+            for (uint i = 0; i < n; i++)
             {
-                BinaryPrimitives.WriteUInt16BigEndian(buffer, values[i]);
-                WriteExactly(fileHandle, buffer, 2);
-                i++;
+                ushort v = GetWordMSB(values[i]);
+                bytes[o] = (byte)v;
+                bytes[o + 1] = (byte)(v >> 8);
+                o += 2;
             }
+
+            _ = DexterFile.FileWrite(file, bytes, 0, bytes.Length);
         }
 
         // DexterEndian::FileWriteLongArrayMSB(PHYSFS_File*, unsigned int const*, unsigned int)
-        internal static void FileWriteLongArrayMSB(nint fileHandle, uint[] values, uint count)
+        internal static void FileWriteLongArrayMSB(DexterFile.FileHandle file, uint[] values, uint count)
         {
             if (values == null || count == 0)
             {
                 return;
             }
 
-            uint limit = count;
-            if (limit > (uint)values.Length)
+            uint n = count;
+            if (n > (uint)values.Length)
             {
-                limit = (uint)values.Length;
+                n = (uint)values.Length;
             }
 
-            byte[] buffer = new byte[4];
-
-            uint i = 0;
-            while (i < limit)
+            byte[] bytes = new byte[checked((int)n) * 4];
+            int o = 0;
+            for (uint i = 0; i < n; i++)
             {
-                BinaryPrimitives.WriteUInt32BigEndian(buffer, values[i]);
-                WriteExactly(fileHandle, buffer, 4);
-                i++;
+                uint v = GetLongMSB(values[i]);
+                bytes[o] = (byte)v;
+                bytes[o + 1] = (byte)(v >> 8);
+                bytes[o + 2] = (byte)(v >> 16);
+                bytes[o + 3] = (byte)(v >> 24);
+                o += 4;
             }
+
+            _ = DexterFile.FileWrite(file, bytes, 0, bytes.Length);
         }
 
         // DexterEndian::FileReadWordArrayLSB(PHYSFS_File*, unsigned short*, unsigned int)
-        internal static void FileReadWordArrayLSB(nint fileHandle, ushort[] values, uint count)
+        internal static void FileReadWordArrayLSB(DexterFile.FileHandle file, ushort[] destination, uint count)
         {
-            if (values == null || count == 0)
+            if (destination == null || count == 0)
             {
                 return;
             }
 
-            uint limit = count;
-            if (limit > (uint)values.Length)
+            uint n = count;
+            if (n > (uint)destination.Length)
             {
-                limit = (uint)values.Length;
+                n = (uint)destination.Length;
             }
 
-            byte[] buffer = new byte[2];
+            byte[] bytes = new byte[checked((int)n) * 2];
+            int read = DexterFile.FileRead(file, bytes, 0, bytes.Length, 0);
+            int items = read / 2;
 
-            uint i = 0;
-            while (i < limit)
+            int o = 0;
+            for (int i = 0; i < items; i++)
             {
-                ReadExactly(fileHandle, buffer, 2);
-                values[i] = BinaryPrimitives.ReadUInt16LittleEndian(buffer);
-                i++;
+                destination[i] = (ushort)(bytes[o] | (bytes[o + 1] << 8));
+                o += 2;
             }
         }
 
         // DexterEndian::FileReadLongArrayLSB(PHYSFS_File*, unsigned int*, unsigned int)
-        internal static void FileReadLongArrayLSB(nint fileHandle, uint[] values, uint count)
+        internal static void FileReadLongArrayLSB(DexterFile.FileHandle file, uint[] destination, uint count)
         {
-            if (values == null || count == 0)
+            if (destination == null || count == 0)
             {
                 return;
             }
 
-            uint limit = count;
-            if (limit > (uint)values.Length)
+            uint n = count;
+            if (n > (uint)destination.Length)
             {
-                limit = (uint)values.Length;
+                n = (uint)destination.Length;
             }
 
-            byte[] buffer = new byte[4];
+            byte[] bytes = new byte[checked((int)n) * 4];
+            int read = DexterFile.FileRead(file, bytes, 0, bytes.Length, 0);
+            int items = read / 4;
 
-            uint i = 0;
-            while (i < limit)
+            int o = 0;
+            for (int i = 0; i < items; i++)
             {
-                ReadExactly(fileHandle, buffer, 4);
-                values[i] = BinaryPrimitives.ReadUInt32LittleEndian(buffer);
-                i++;
+                destination[i] = (uint)(bytes[o] | (bytes[o + 1] << 8) | (bytes[o + 2] << 16) | (bytes[o + 3] << 24));
+                o += 4;
             }
         }
 
         // DexterEndian::FileReadWordArrayMSB(PHYSFS_File*, unsigned short*, unsigned int)
-        internal static void FileReadWordArrayMSB(nint fileHandle, ushort[] values, uint count)
+        internal static void FileReadWordArrayMSB(DexterFile.FileHandle file, ushort[] destination, uint count)
         {
-            if (values == null || count == 0)
+            if (destination == null || count == 0)
             {
                 return;
             }
 
-            uint limit = count;
-            if (limit > (uint)values.Length)
+            uint n = count;
+            if (n > (uint)destination.Length)
             {
-                limit = (uint)values.Length;
+                n = (uint)destination.Length;
             }
 
-            byte[] buffer = new byte[2];
+            byte[] bytes = new byte[checked((int)n) * 2];
+            int read = DexterFile.FileRead(file, bytes, 0, bytes.Length, 0);
+            int items = read / 2;
 
-            uint i = 0;
-            while (i < limit)
+            int o = 0;
+            for (int i = 0; i < items; i++)
             {
-                ReadExactly(fileHandle, buffer, 2);
-                values[i] = BinaryPrimitives.ReadUInt16BigEndian(buffer);
-                i++;
+                ushort v = (ushort)(bytes[o] | (bytes[o + 1] << 8));
+                destination[i] = GetWordMSB(v);
+                o += 2;
             }
         }
 
         // DexterEndian::FileReadLongArrayMSB(PHYSFS_File*, unsigned int*, unsigned int)
-        internal static void FileReadLongArrayMSB(nint fileHandle, uint[] values, uint count)
+        internal static void FileReadLongArrayMSB(DexterFile.FileHandle file, uint[] destination, uint count)
         {
-            if (values == null || count == 0)
+            if (destination == null || count == 0)
             {
                 return;
             }
 
-            uint limit = count;
-            if (limit > (uint)values.Length)
+            uint n = count;
+            if (n > (uint)destination.Length)
             {
-                limit = (uint)values.Length;
+                n = (uint)destination.Length;
             }
 
-            byte[] buffer = new byte[4];
+            byte[] bytes = new byte[checked((int)n) * 4];
+            int read = DexterFile.FileRead(file, bytes, 0, bytes.Length, 0);
+            int items = read / 4;
 
-            uint i = 0;
-            while (i < limit)
+            int o = 0;
+            for (int i = 0; i < items; i++)
             {
-                ReadExactly(fileHandle, buffer, 4);
-                values[i] = BinaryPrimitives.ReadUInt32BigEndian(buffer);
-                i++;
-            }
-        }
-
-        // ===== Internal IO helpers =====
-        // These preserve the "read/write exactly N bytes" behavior from the existing C# code.
-
-        private static void ReadExactly(nint fileHandle, byte[] buffer, int count)
-        {
-            int offset = 0;
-
-            while (offset < count)
-            {
-                int read = DexterFile.FileRead(fileHandle, buffer, offset, count - offset, 0);
-                if (read <= 0)
-                {
-                    throw new EndOfStreamException("Unexpected end of file while reading.");
-                }
-
-                offset += read;
-            }
-        }
-
-        private static void WriteExactly(nint fileHandle, byte[] buffer, int count)
-        {
-            int written = DexterFile.FileWrite(fileHandle, buffer, 0, count);
-            if (written != count)
-            {
-                throw new IOException("Failed to write requested number of bytes.");
+                uint v = (uint)(bytes[o] | (bytes[o + 1] << 8) | (bytes[o + 2] << 16) | (bytes[o + 3] << 24));
+                destination[i] = GetLongMSB(v);
+                o += 4;
             }
         }
     }

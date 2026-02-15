@@ -4,8 +4,13 @@
     {
         private readonly byte[]? _pixels8;
         private readonly ushort[]? _pixels16;
+        private byte[]? _alpha8;
 
-        internal ChunkySurface(int width, int height, int bitsPerPixel)
+        internal ChunkySurface(int width, int height, int bitsPerPixel) : this(width, height, bitsPerPixel, false)
+        {
+        }
+
+        internal ChunkySurface(int width, int height, int bitsPerPixel, bool allocateAlpha8)
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
@@ -25,11 +30,21 @@
                 _pixels16 = new ushort[checked(width * height)];
                 _pixels8 = null;
             }
+
+            if (allocateAlpha8)
+            {
+                _alpha8 = new byte[checked(width * height)];
+            }
         }
 
         internal int Width { get; }
         internal int Height { get; }
         internal int BitsPerPixel { get; }
+
+        internal bool HasAlpha8 => _alpha8 != null;
+
+        internal short OriginX { get; set; }
+        internal short OriginY { get; set; }
 
         internal Span<byte> Pixels8
         {
@@ -49,6 +64,21 @@
             }
         }
 
+        internal Span<byte> Alpha8
+        {
+            get
+            {
+                if (_alpha8 == null) throw new InvalidOperationException("Surface has no alpha buffer.");
+                return _alpha8;
+            }
+        }
+
+        internal void EnsureAlpha8()
+        {
+            if (_alpha8 != null) return;
+            _alpha8 = new byte[checked(Width * Height)];
+        }
+
         internal void Clear8(byte value)
         {
             if (BitsPerPixel != 8) throw new InvalidOperationException("Surface is not 8-bit.");
@@ -59,6 +89,12 @@
         {
             if (BitsPerPixel != 16) throw new InvalidOperationException("Surface is not 16-bit.");
             Pixels16.Fill(value);
+        }
+
+        internal void ClearAlpha8(byte value)
+        {
+            EnsureAlpha8();
+            Alpha8.Fill(value);
         }
     }
 }

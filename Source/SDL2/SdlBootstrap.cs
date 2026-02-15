@@ -24,7 +24,18 @@ namespace OpenVikings.SDL2
 
         private static unsafe nint CreateWindow(Sdl sdl, string windowTitle, int width, int height)
         {
-            Window* window = sdl.CreateWindow(windowTitle, Sdl.WindowposUndefined, Sdl.WindowposUndefined, width, height, (uint)WindowFlags.Shown);
+            uint flags =
+                (uint)WindowFlags.Shown |
+                (uint)WindowFlags.Resizable;
+
+            Window* window = sdl.CreateWindow(
+                windowTitle,
+                Sdl.WindowposUndefined,
+                Sdl.WindowposUndefined,
+                width,
+                height,
+                flags);
+
             if (window == null)
             {
                 string error = sdl.GetErrorS();

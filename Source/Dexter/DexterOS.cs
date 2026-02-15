@@ -768,6 +768,461 @@ namespace OpenVikings.Dexter
             return value;
         }
 
+        // DexterOS::PeekTextKey()
+        internal byte PeekTextKey()
+        {
+            TextEvent ev = _textQueue[_textQueueRead];
+            if (ev.InUse)
+            {
+                return ev.Value;
+            }
+
+            return 0;
+        }
+
+        // DexterOS::TextInput(char*, short)
+        // Returns true if input should continue (no Enter yet / or no input available).
+        // Returns false if Enter was received.
+        internal bool TextInput(ref string text, short maxLen)
+        {
+            if (maxLen < 0)
+            {
+                maxLen = 0;
+            }
+
+            if (text == null)
+            {
+                text = string.Empty;
+            }
+
+            while (true)
+            {
+                byte b = GetTextKey(); // consumes one queued text byte
+                if (b == 0)
+                {
+                    // No input available
+                    return true;
+                }
+
+                if (b == 0x0D)
+                {
+                    // Enter
+                    return false;
+                }
+
+                if (b == 0x08)
+                {
+                    // Backspace
+                    if (text.Length > 0)
+                    {
+                        text = text.Substring(0, text.Length - 1);
+                    }
+                    continue;
+                }
+
+                if (b < 0x20)
+                {
+                    // Ignore other control chars
+                    continue;
+                }
+
+                if (text.Length < maxLen)
+                {
+                    char ch = (char)b;
+                    text = string.Concat(text, ch);
+                }
+            }
+        }
+
+        // DexterOS::MouseButtons()
+        internal int MouseButtons()
+        {
+            return _mouseButtonCount;
+        }
+
+        // DexterOS::ThreadRegister(unsigned short)
+        internal void ThreadRegister(ushort dexThreadId)
+        {
+            if (dexThreadId > 4)
+            {
+                return;
+            }
+
+            if (!_threadMutexInitialized)
+            {
+                MutexInit();
+            }
+
+            if (_threadMutexInitialized)
+            {
+                MutexLock();
+            }
+
+            try
+            {
+                long osThreadId = GetOSThreadID();
+                ThreadRegisterInternal(dexThreadId, osThreadId);
+            }
+            finally
+            {
+                if (_threadMutexInitialized)
+                {
+                    MutexUnLock();
+                }
+            }
+        }
+
+        // DexterOS::GetDexterThreadID()
+        internal int GetDexterThreadID()
+        {
+            long osThreadId = GetOSThreadID();
+
+            for (int i = 0; i < _threadSlots.Length; i++)
+            {
+                if (_threadSlots[i].InUse && _threadSlots[i].OsThreadId == osThreadId)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        // DexterOS::ThreadEnd(short)
+        internal void ThreadEnd(short dexThreadId)
+        {
+            int currentId = GetDexterThreadID();
+
+            int requestedId = dexThreadId;
+            if (requestedId < 0 || requestedId == currentId)
+            {
+                requestedId = currentId;
+            }
+
+            if (requestedId < 0 || requestedId > 4)
+            {
+                return;
+            }
+
+            int slotIndex = requestedId;
+            if (!_threadSlots[slotIndex].InUse || !_threadSlots[slotIndex].Registered)
+            {
+                return;
+            }
+
+            // Disable the target thread (cooperative stop).
+            _threadSlots[slotIndex] = _threadSlots[slotIndex].WithEnabled(false);
+
+            // Original calls into OSEnvironment for cross-thread termination.
+            // In this managed port, threads are cooperative; keep the call for parity.
+            if (requestedId != currentId && dexThreadId >= 0)
+            {
+                _osEnvironment.ThreadEnd((ushort)requestedId);
+            }
+        }
+
+        // DexterOS::OSUpdate()
+        // Returns true if one SDL event was processed, otherwise false.
+        internal bool OSUpdate()
+        {
+            Event ev = default;
+            int hasEvent = _sdl.PollEvent(ref ev);
+            if (hasEvent == 0)
+            {
+                return false;
+            }
+
+            // SDL_QUIT
+            if (ev.Type == (uint)EventType.Quit)
+            {
+                Environment.Exit(0);
+                return true;
+            }
+
+            // SDL_WINDOWEVENT
+            if (ev.Type == (uint)EventType.Windowevent)
+            {
+                WindowEvent windowEvent = ev.Window;
+                if (windowEvent.Event == (byte)WindowEventID.FocusGained)
+                {
+                    SetFocusChange(0x04);
+                    return true;
+                }
+
+                if (windowEvent.Event == (byte)WindowEventID.FocusLost)
+                {
+                    SetFocusChange(0x08);
+                    return true;
+                }
+
+                return true;
+            }
+
+            // SDL_KEYDOWN
+            if (ev.Type == (uint)EventType.Keydown)
+            {
+                KeyboardEvent keyEvent = ev.Key;
+                uint keyCode = unchecked((uint)keyEvent.Keysym.Sym);
+
+                KeyPressDown(keyCode);
+
+                // Feed text queue from keydown (ASCII). This replaces SDL_TEXTINPUT without unsafe/marshalling.
+                if (TryMapKeyDownToAscii(keyEvent.Keysym, out byte ascii))
+                {
+                    AddTextKey(ascii);
+                }
+
+                // Alt+Enter screen toggle behavior (approximation).
+                bool altPressed = (keyEvent.Keysym.Mod & (ushort)Keymod.KmodAlt) != 0;
+                if (!_gfxScreen.ScreenLocked && keyCode == 0x0D && altPressed)
+                {
+                    _gfxScreen.SetScreenMode(_gfxScreen.RenderWidth, _gfxScreen.RenderHeight, _gfxScreen.RenderBitDepth, true);
+                }
+
+                return true;
+            }
+
+            // SDL_KEYUP
+            if (ev.Type == (uint)EventType.Keyup)
+            {
+                KeyboardEvent keyEvent = ev.Key;
+                uint keyCode = unchecked((uint)keyEvent.Keysym.Sym);
+                KeyPressUp(keyCode);
+                return true;
+            }
+
+            // SDL_MOUSEMOTION
+            if (ev.Type == (uint)EventType.Mousemotion)
+            {
+                MouseMotionEvent motion = ev.Motion;
+
+                bool relative = _sdl.GetRelativeMouseMode() == SdlBool.True;
+
+                if (relative)
+                {
+                    UpdateMouse(unchecked((short)motion.Xrel), unchecked((short)motion.Yrel), 1, false);
+                }
+                else
+                {
+                    UpdateMouse(unchecked((short)motion.X), unchecked((short)motion.Y), 0, false);
+                }
+
+                return true;
+            }
+
+            // SDL_MOUSEBUTTONDOWN
+            if (ev.Type == (uint)EventType.Mousebuttondown)
+            {
+                MouseButtonEvent button = ev.Button;
+                byte mapped = MapSdlMouseButton(button.Button);
+                if (mapped != 0xFF)
+                {
+                    MousePressDown(mapped);
+                }
+                return true;
+            }
+
+            // SDL_MOUSEBUTTONUP
+            if (ev.Type == (uint)EventType.Mousebuttonup)
+            {
+                MouseButtonEvent button = ev.Button;
+                byte mapped = MapSdlMouseButton(button.Button);
+                if (mapped != 0xFF)
+                {
+                    MousePressUp(mapped);
+                }
+                return true;
+            }
+
+            // SDL_MOUSEWHEEL
+            if (ev.Type == (uint)EventType.Mousewheel)
+            {
+                MouseWheelEvent wheel = ev.Wheel;
+
+                byte wheelButton = wheel.Y > 0 ? (byte)3 : (byte)4;
+                MousePressDown(wheelButton);
+                MousePressUp(wheelButton);
+
+                return true;
+            }
+
+            return true;
+        }
+
+        private static bool TryMapKeyDownToAscii(Keysym keysym, out byte ascii)
+        {
+            ascii = 0;
+
+            uint sym = unchecked((uint)keysym.Sym);
+            bool shift = (keysym.Mod & (ushort)Keymod.KmodShift) != 0;
+
+            // Enter / Backspace
+            if (sym == 0x0D)
+            {
+                ascii = 0x0D;
+                return true;
+            }
+
+            if (sym == 0x08)
+            {
+                ascii = 0x08;
+                return true;
+            }
+
+            // Letters: SDL keycodes for letters are typically ASCII 'a'..'z'
+            if (sym >= 'a' && sym <= 'z')
+            {
+                byte b = (byte)sym;
+                if (shift)
+                {
+                    b = (byte)(b - 0x20); // to upper
+                }
+
+                ascii = b;
+                return true;
+            }
+
+            // Digits: '0'..'9' (with shift symbol mapping)
+            if (sym >= '0' && sym <= '9')
+            {
+                byte digit = (byte)sym;
+                if (!shift)
+                {
+                    ascii = digit;
+                    return true;
+                }
+
+                // US keyboard shift mapping: )!@#$%^&*(
+                ascii = digit switch
+                {
+                    (byte)'0' => (byte)')',
+                    (byte)'1' => (byte)'!',
+                    (byte)'2' => (byte)'@',
+                    (byte)'3' => (byte)'#',
+                    (byte)'4' => (byte)'$',
+                    (byte)'5' => (byte)'%',
+                    (byte)'6' => (byte)'^',
+                    (byte)'7' => (byte)'&',
+                    (byte)'8' => (byte)'*',
+                    (byte)'9' => (byte)'(',
+                    _ => 0
+                };
+
+                return ascii != 0;
+            }
+
+            // Common punctuation (US layout mapping)
+            if (TryMapPunctuationToAscii(sym, shift, out ascii))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryMapPunctuationToAscii(uint sym, bool shift, out byte ascii)
+        {
+            ascii = 0;
+
+            // SDL keycodes for many punctuation keys match ASCII for the unshifted character.
+            // Shift alternatives are mapped for a US layout.
+            if (sym == ' ')
+            {
+                ascii = (byte)' ';
+                return true;
+            }
+
+            if (sym == '-')
+            {
+                ascii = shift ? (byte)'_' : (byte)'-';
+                return true;
+            }
+
+            if (sym == '=')
+            {
+                ascii = shift ? (byte)'+' : (byte)'=';
+                return true;
+            }
+
+            if (sym == '[')
+            {
+                ascii = shift ? (byte)'{' : (byte)'[';
+                return true;
+            }
+
+            if (sym == ']')
+            {
+                ascii = shift ? (byte)'}' : (byte)']';
+                return true;
+            }
+
+            if (sym == '\\')
+            {
+                ascii = shift ? (byte)'|' : (byte)'\\';
+                return true;
+            }
+
+            if (sym == ';')
+            {
+                ascii = shift ? (byte)':' : (byte)';';
+                return true;
+            }
+
+            if (sym == '\'')
+            {
+                ascii = shift ? (byte)'"' : (byte)'\'';
+                return true;
+            }
+
+            if (sym == ',')
+            {
+                ascii = shift ? (byte)'<' : (byte)',';
+                return true;
+            }
+
+            if (sym == '.')
+            {
+                ascii = shift ? (byte)'>' : (byte)'.';
+                return true;
+            }
+
+            if (sym == '/')
+            {
+                ascii = shift ? (byte)'?' : (byte)'/';
+                return true;
+            }
+
+            if (sym == '`')
+            {
+                ascii = shift ? (byte)'~' : (byte)'`';
+                return true;
+            }
+
+            return false;
+        }
+
+        private static byte MapSdlMouseButton(byte sdlButton)
+        {
+            // SDL: 1=Left, 2=Middle, 3=Right
+            // Dexter: 0=Left, 2=Middle, 1=Right
+            if (sdlButton == 1)
+            {
+                return 0;
+            }
+
+            if (sdlButton == 2)
+            {
+                return 2;
+            }
+
+            if (sdlButton == 3)
+            {
+                return 1;
+            }
+
+            return 0xFF;
+        }
+
         internal readonly struct KeyEvent
         {
             internal KeyEvent(byte type, byte key, int duration, ushort qualifiers)

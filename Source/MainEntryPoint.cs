@@ -29,11 +29,13 @@ namespace OpenVikings
                 DexterOS dexterOs = new(osKeyTranslateA, osKeyTranslateB, osKeyTranslateC, osEnvironment, gfxState, gfxScreen);
                 dexterOs.SetCommandLineArgs(args.Length, args);
 
-                // If SignalHooks currently expects a different type, adapt it to accept SilkSdlApi or ISdlApi.
+                DexterGFX dexterGfx = new(1024);
+
                 SignalHooks.Install(sdl.Api);
 
                 DexterApp app = new(
                     dexterOs,
+                    dexterGfx,
                     osEnvironment,
                     mainCallback: static () => { },
                     installCallback: null,
@@ -41,7 +43,7 @@ namespace OpenVikings
                     setupCallback: null,
                     getCallbackTimeMs: null,
                     onFpsSample: null,
-                    osUpdateCallback: static () => false);
+                    osUpdateCallback: dexterOs.OSUpdate);
 
                 bool ok = app.Init();
                 if (ok)
