@@ -922,131 +922,137 @@ namespace OpenVikings.Dexter
         }
 
         // DexterOS::OSUpdate()
-        // Returns true if one SDL event was processed, otherwise false.
+        // Pumps all pending SDL events and returns whether the app should continue running.
         internal bool OSUpdate()
         {
+            bool quitRequested = false;
+
             Event ev = default;
-            int hasEvent = _sdl.PollEvent(ref ev);
-            if (hasEvent == 0)
+            while (_sdl.PollEvent(ref ev) != 0)
             {
-                return false;
-            }
-
-            // SDL_QUIT
-            if (ev.Type == (uint)EventType.Quit)
-            {
-                Environment.Exit(0);
-                return true;
-            }
-
-            // SDL_WINDOWEVENT
-            if (ev.Type == (uint)EventType.Windowevent)
-            {
-                WindowEvent windowEvent = ev.Window;
-                if (windowEvent.Event == (byte)WindowEventID.FocusGained)
+                // SDL_QUIT
+                if (ev.Type == (uint)EventType.Quit)
                 {
-                    SetFocusChange(0x04);
-                    return true;
+                    quitRequested = true;
+                    continue;
                 }
 
-                if (windowEvent.Event == (byte)WindowEventID.FocusLost)
+                // SDL_WINDOWEVENT
+                if (ev.Type == (uint)EventType.Windowevent)
                 {
-                    SetFocusChange(0x08);
-                    return true;
+                    WindowEvent windowEvent = ev.Window;
+
+                    if (windowEvent.Event == (byte)WindowEventID.Close)
+                    {
+                        quitRequested = true;
+                        continue;
+                    }
+
+                    if (windowEvent.Event == (byte)WindowEventID.FocusGained)
+                    {
+                        SetFocusChange(0x04);
+                        continue;
+                    }
+
+                    if (windowEvent.Event == (byte)WindowEventID.FocusLost)
+                    {
+                        SetFocusChange(0x08);
+                        continue;
+                    }
+
+                    continue;
                 }
 
-                return true;
-            }
-
-            // SDL_KEYDOWN
-            if (ev.Type == (uint)EventType.Keydown)
-            {
-                KeyboardEvent keyEvent = ev.Key;
-                uint keyCode = unchecked((uint)keyEvent.Keysym.Sym);
-
-                KeyPressDown(keyCode);
-
-                // Feed text queue from keydown (ASCII). This replaces SDL_TEXTINPUT without unsafe/marshalling.
-                if (TryMapKeyDownToAscii(keyEvent.Keysym, out byte ascii))
+                // SDL_KEYDOWN
+                if (ev.Type == (uint)EventType.Keydown)
                 {
-                    AddTextKey(ascii);
+                    KeyboardEvent keyEvent = ev.Key;
+                    uint keyCode = unchecked((uint)keyEvent.Keysym.Sym);
+
+                    KeyPressDown(keyCode);
+
+                    // Feed text queue from keydown (ASCII). This replaces SDL_TEXTINPUT without unsafe/marshalling.
+                    if (TryMapKeyDownToAscii(keyEvent.Keysym, out byte ascii))
+                    {
+                        AddTextKey(ascii);
+                    }
+
+                    // Alt+Enter screen toggle behavior (approximation).
+                    bool altPressed = (keyEvent.Keysym.Mod & (ushort)Keymod.KmodAlt) != 0;
+                    if (!_gfxScreen.ScreenLocked && keyCode == 0x0D && altPressed)
+                    {
+                        _gfxScreen.SetScreenMode(_gfxScreen.RenderWidth, _gfxScreen.RenderHeight, _gfxScreen.RenderBitDepth, true);
+                    }
+
+                    continue;
                 }
 
-                // Alt+Enter screen toggle behavior (approximation).
-                bool altPressed = (keyEvent.Keysym.Mod & (ushort)Keymod.KmodAlt) != 0;
-                if (!_gfxScreen.ScreenLocked && keyCode == 0x0D && altPressed)
+                // SDL_KEYUP
+                if (ev.Type == (uint)EventType.Keyup)
                 {
-                    _gfxScreen.SetScreenMode(_gfxScreen.RenderWidth, _gfxScreen.RenderHeight, _gfxScreen.RenderBitDepth, true);
+                    KeyboardEvent keyEvent = ev.Key;
+                    uint keyCode = unchecked((uint)keyEvent.Keysym.Sym);
+                    KeyPressUp(keyCode);
+                    continue;
                 }
 
-                return true;
-            }
-
-            // SDL_KEYUP
-            if (ev.Type == (uint)EventType.Keyup)
-            {
-                KeyboardEvent keyEvent = ev.Key;
-                uint keyCode = unchecked((uint)keyEvent.Keysym.Sym);
-                KeyPressUp(keyCode);
-                return true;
-            }
-
-            // SDL_MOUSEMOTION
-            if (ev.Type == (uint)EventType.Mousemotion)
-            {
-                MouseMotionEvent motion = ev.Motion;
-
-                bool relative = _sdl.GetRelativeMouseMode() == SdlBool.True;
-
-                if (relative)
+                // SDL_MOUSEMOTION
+                if (ev.Type == (uint)EventType.Mousemotion)
                 {
-                    UpdateMouse(unchecked((short)motion.Xrel), unchecked((short)motion.Yrel), 1, false);
-                }
-                else
-                {
-                    UpdateMouse(unchecked((short)motion.X), unchecked((short)motion.Y), 0, false);
+                    MouseMotionEvent motion = ev.Motion;
+
+                    bool relative = _sdl.GetRelativeMouseMode() == SdlBool.True;
+
+                    if (relative)
+                    {
+                        UpdateMouse(unchecked((short)motion.Xrel), unchecked((short)motion.Yrel), 1, false);
+                    }
+                    else
+                    {
+                        UpdateMouse(unchecked((short)motion.X), unchecked((short)motion.Y), 0, false);
+                    }
+
+                    continue;
                 }
 
-                return true;
-            }
-
-            // SDL_MOUSEBUTTONDOWN
-            if (ev.Type == (uint)EventType.Mousebuttondown)
-            {
-                MouseButtonEvent button = ev.Button;
-                byte mapped = MapSdlMouseButton(button.Button);
-                if (mapped != 0xFF)
+                // SDL_MOUSEBUTTONDOWN
+                if (ev.Type == (uint)EventType.Mousebuttondown)
                 {
-                    MousePressDown(mapped);
+                    MouseButtonEvent button = ev.Button;
+                    byte mapped = MapSdlMouseButton(button.Button);
+                    if (mapped != 0xFF)
+                    {
+                        MousePressDown(mapped);
+                    }
+                    continue;
                 }
-                return true;
-            }
 
-            // SDL_MOUSEBUTTONUP
-            if (ev.Type == (uint)EventType.Mousebuttonup)
-            {
-                MouseButtonEvent button = ev.Button;
-                byte mapped = MapSdlMouseButton(button.Button);
-                if (mapped != 0xFF)
+                // SDL_MOUSEBUTTONUP
+                if (ev.Type == (uint)EventType.Mousebuttonup)
                 {
-                    MousePressUp(mapped);
+                    MouseButtonEvent button = ev.Button;
+                    byte mapped = MapSdlMouseButton(button.Button);
+                    if (mapped != 0xFF)
+                    {
+                        MousePressUp(mapped);
+                    }
+                    continue;
                 }
-                return true;
+
+                // SDL_MOUSEWHEEL
+                if (ev.Type == (uint)EventType.Mousewheel)
+                {
+                    MouseWheelEvent wheel = ev.Wheel;
+
+                    byte wheelButton = wheel.Y > 0 ? (byte)3 : (byte)4;
+                    MousePressDown(wheelButton);
+                    MousePressUp(wheelButton);
+
+                    continue;
+                }
             }
 
-            // SDL_MOUSEWHEEL
-            if (ev.Type == (uint)EventType.Mousewheel)
-            {
-                MouseWheelEvent wheel = ev.Wheel;
-
-                byte wheelButton = wheel.Y > 0 ? (byte)3 : (byte)4;
-                MousePressDown(wheelButton);
-                MousePressUp(wheelButton);
-
-                return true;
-            }
-
-            return true;
+            return !quitRequested;
         }
 
         private static bool TryMapKeyDownToAscii(Keysym keysym, out byte ascii)
