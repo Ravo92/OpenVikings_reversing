@@ -1,525 +1,332 @@
 ﻿namespace OpenVikings.Dexter
 {
-    // Managed port of DexterApp.cxx.
-    // Focus: preserve original control flow and RNG/Zone behavior, while avoiding pointers and unmanaged memory.
-    internal sealed class DexterApp
+    // Managed port of DexterApp.cxx (current version).
+    // Goal: preserve original control flow, callbacks, random table initialization, and shutdown ordering.
+    internal sealed class DexterApp : IDisposable
     {
-        internal delegate bool BoolCallback();
         internal delegate void VoidCallback();
-        internal delegate int IntCallback();
+        internal delegate bool BoolCallback();
 
-        private readonly DexterOS _os;
-        private readonly OSEnvironment _osEnvironment;
-        private readonly DexterGFX _gfx;
+        // --------------------------------------------------------------------
+        // Subsystem bindings (DexterGFX is instance-based in this port)
+        // --------------------------------------------------------------------
 
-        // External hooks (original: DexterMain, DexterAppInstall, DexterAppExit, DexterAppSetup, OSUpdate).
-        private readonly VoidCallback _mainCallback;
-        private readonly BoolCallback? _installCallback;
-        private readonly BoolCallback? _exitCallback;
-        private readonly BoolCallback? _setupCallback;
+        private static DexterGFX? _gfx;
 
-        private readonly IntCallback? _getCallbackTimeMs;
-        private readonly VoidCallback? _onFpsSample;
-        private readonly BoolCallback? _osUpdateCallback;
-
-        // Optional hooks to match original shutdown/update behavior without hard dependencies.
-        private readonly VoidCallback? _soundUpdateCallback;
-        private readonly VoidCallback? _soundShutDownCallback;
-        private readonly VoidCallback? _gfxShutDownCallback;
-
-        private bool _dexterActive;
-        internal bool AppContinue { get; private set; }
-
-        private uint _fullScreenKeyVal;
-        private uint _normalWindowKeyVal;
-        private uint _doubleWindowKeyVal;
-
-        // ----------------------------
-        // RANMAR RNG (Marsaglia & Zaman)
-        // ----------------------------
-
-        private readonly float[] _randomU; // 97
-        private int _i97;                  // 0..96
-        private int _j97;                  // 0..96
-
-        // c, cd, cm as doubles (original uses 64-bit constants).
-        private double _c;
-        private readonly double _cd;
-        private readonly double _cm;
-
-        private readonly RandomState[] _randomStack;
-        private int _randomStackPos;
-
-        // ----------------------------
-        // Zones
-        // ----------------------------
-
-        private ZoneEntry[]? _zones;
-        private short _maxZones;
-
-        internal DexterApp(DexterOS os, DexterGFX gfx, OSEnvironment osEnvironment, VoidCallback mainCallback, BoolCallback? installCallback, BoolCallback? exitCallback, BoolCallback? setupCallback, IntCallback? getCallbackTimeMs, VoidCallback? onFpsSample, BoolCallback? osUpdateCallback)
+        internal static DexterGFX GFX
         {
-            ArgumentNullException.ThrowIfNull(os);
-            ArgumentNullException.ThrowIfNull(gfx);
-            ArgumentNullException.ThrowIfNull(osEnvironment);
-            ArgumentNullException.ThrowIfNull(mainCallback);
+            get
+            {
+                if (_gfx == null)
+                {
+                    throw new InvalidOperationException("DexterApp.GFX is not bound. Bind a DexterGFX instance before calling DexterApp.Init/MainThread.");
+                }
 
-            _os = os;
-            _gfx = gfx;
-            _osEnvironment = osEnvironment;
-
-            _mainCallback = mainCallback;
-            _installCallback = installCallback;
-            _exitCallback = exitCallback;
-            _setupCallback = setupCallback;
-
-            _getCallbackTimeMs = getCallbackTimeMs;
-            _onFpsSample = onFpsSample;
-            _osUpdateCallback = osUpdateCallback;
-
-            _dexterActive = false;
-            AppContinue = false;
-
-            _fullScreenKeyVal = 0;
-            _normalWindowKeyVal = 0;
-            _doubleWindowKeyVal = 0;
-
-            _randomU = new float[0x61];
-            _randomStack = new RandomState[4];
-            _randomStackPos = 0;
-
-            _cd = 7654321.0 / 16777216.0;
-            _cm = 16777213.0 / 16777216.0;
-
-            Randomize(0);
+                return _gfx;
+            }
         }
 
-        // DexterApp::Init()
-        internal bool Init()
+        internal static void BindGfx(DexterGFX gfx)
         {
-            DexterAppConfig();
+            ArgumentNullException.ThrowIfNull(gfx);
+            _gfx = gfx;
+        }
 
-            bool ok = _os.OSInit();
+        // --------------------------------------------------------------------
+        // Global-ish state (original uses globals; keep static for fidelity)
+        // --------------------------------------------------------------------
+
+        internal static bool DexterActive;
+        internal static bool AppContinue;
+
+        // Original external hooks (function pointers)
+        internal static VoidCallback? DexterMainCallBack;
+        internal static BoolCallback? DexterAppInstallCallBack;
+        internal static BoolCallback? DexterAppExitCallBack;
+        internal static BoolCallback? DexterAppSetupCallBack;
+
+        // Original "globals" referenced from other modules
+        internal static float[] Random = new float[0x61]; // 97 floats
+
+        // These overlap warnings in decompile; treat as the RANMAR constants/state.
+        // cd = 7654321 / 2^24, cm = 16777213 / 2^24, c initial = 362436 / 2^24
+        internal static double RandomC = 362436.0 / 16777216.0;
+        internal static readonly double RandomCd = 7654321.0 / 16777216.0;
+        internal static readonly double RandomCm = 16777213.0 / 16777216.0;
+
+        internal static int RandomI97 = 0x60; // 96 (0-based)
+        internal static int RandomJ97 = 0x20; // 32 (0-based)  (decompile shows 0x20)
+
+        // --------------------------------------------------------------------
+        // Zones (decompile shows Zone allocation as MaxZones * 0x14 bytes, and zeroing entries)
+        // The concrete zone semantics likely live elsewhere; this matches memory footprint init.
+        // --------------------------------------------------------------------
+
+        internal static short MaxZones;
+        internal static DexZone[]? Zone;
+
+        // --------------------------------------------------------------------
+        // Constructor (DexterApp::DexterApp)
+        // --------------------------------------------------------------------
+
+        internal DexterApp()
+        {
+            // In C++ this calls base/embedded constructors:
+            // DexterOS::DexterOS, DexterFile::DexterFile, DexterGFX::DexterGFX.
+            // In managed code those are static subsystems; nothing to instantiate here.
+
+            BuildRandomTable();
+
+            // Reset "AppName/AppTitle/AppPath" like original constructor does.
+            DexterOS.AppName = null;
+            DexterOS.AppTitle = null;
+            DexterOS.AppPath = null;
+        }
+
+        // --------------------------------------------------------------------
+        // Dispose / Shutdown mapping (DexterApp::~DexterApp + ShutDown + DexterCleanUp)
+        // --------------------------------------------------------------------
+
+        public void Dispose()
+        {
+            // Map destructor behavior: do full cleanup only if active.
+            if (DexterActive)
+            {
+                // Matches ~DexterApp() order in cxx.
+                DexterOS.ThreadEnd(1);
+                DexterOS.ThreadEnd(2);
+                DexterOS.ThreadEnd(3);
+                DexterOS.ThreadEnd(4);
+
+                GFX.GFXShutDown();
+                DexterAudio.SoundShutDown();
+
+                DexterActive = false;
+
+                DexterAppExitCallBack?.Invoke();
+
+                if (Zone != null)
+                {
+                    Zone = null;
+                    MaxZones = 0;
+                }
+
+                DexterFile.FileSystemShutDown();
+                DexterMemory.MemorySystemShutDown();
+                DexterMemory.FreeHeap();
+
+                DexterOS.ThreadRelease(0);
+                OSGeneric.CleanUp();
+
+                DexterActive = false;
+            }
+        }
+
+        // DexterApp::ShutDown()
+        internal static void ShutDown()
+        {
+            if (!DexterActive)
+            {
+                return;
+            }
+
+            DexterOS.ThreadEnd(1);
+            DexterOS.ThreadEnd(2);
+            DexterOS.ThreadEnd(3);
+            DexterOS.ThreadEnd(4);
+
+            GFX.GFXShutDown();
+            DexterAudio.SoundShutDown();
+
+            DexterActive = false;
+        }
+
+        // DexterApp::DexterCleanUp()
+        internal static void DexterCleanUp()
+        {
+            DexterAppExitCallBack?.Invoke();
+
+            if (Zone != null)
+            {
+                Zone = null;
+                MaxZones = 0;
+            }
+
+            DexterFile.FileSystemShutDown();
+            DexterMemory.MemorySystemShutDown();
+            DexterMemory.FreeHeap();
+
+            DexterOS.ThreadRelease(0);
+            OSGeneric.CleanUp();
+        }
+
+        // --------------------------------------------------------------------
+        // Init (DexterApp::Init)
+        // --------------------------------------------------------------------
+
+        internal static bool Init()
+        {
+            // Init()::count++ exists in decompile but not used for logic; omit.
+
+            DexterOS.AppName = "DexterApp";
+            DexterOS.AppTitle = "Dexter Application";
+
+            bool ok = DexterOS.OSInit();
             if (!ok)
             {
                 return false;
             }
 
-            AppContinue = true;
+            // These two flags are globals in the binary; keep the side effects minimal here.
+            // DAT_100477638 = 1; DAT_10047763a = 1;  (unknown purpose)
 
-            // Original: ThreadRegister(0) + TimeCheckReset = OSEnvironment::Time().
-            // This managed port relies on OSEnvironment/SDL tick base being set up by OSInit().
+            DexterOS.ThreadRegister(0);
+            DexterOS.TimeCheckReset = unchecked((int)OSEnvironment.Time());
 
-            if (_installCallback != null)
+            DexterAppConfig();
+
+            if (DexterAppInstallCallBack != null)
             {
-                if (!_installCallback())
+                bool installOk = DexterAppInstallCallBack();
+                if (!installOk)
                 {
                     return false;
                 }
             }
 
-            _dexterActive = true;
+            DexterActive = true;
 
-            // Original: DexterMemory::AllocHeap() + audio init + gfx init.
             DexterMemory.AllocHeap();
 
-            // Zones are allocated only once the desired MaxZones is known.
-            // Preserve behavior: allocate at Init() time if MaxZones was already set.
-            if (_maxZones > 0 && _zones == null)
+            if (DexterAudio.UseSoundStatus)
             {
-                _zones = new ZoneEntry[_maxZones];
+                DexterAudio.SoundInit();
             }
 
-            if (_setupCallback != null)
+            GFX.SetRenderDepth(16, 0x10);
+            ok = GFX.GFXInit();
+            if (!ok)
             {
-                if (!_setupCallback())
+                // Failure path mirrors cxx: shut down active threads/gfx/audio, exit callback, free zones, filesystem/memory, cleanup.
+                ShutDown();
+                DexterCleanUp();
+                return false;
+            }
+
+            // Allocate Zone array if MaxZones > 0 (and clear)
+            if (MaxZones > 0)
+            {
+                int count = MaxZones;
+                if (count > 0)
                 {
-                    ShutDown();
-                    DexterCleanUp();
-                    return false;
+                    Zone = new DexZone[count];
+                    for (int i = 0; i < Zone.Length; i++)
+                    {
+                        Zone[i] = default;
+                    }
                 }
+            }
+
+            ok = DexterAppSetup();
+            if (!ok)
+            {
+                // Failure path matches cxx.
+                ShutDown();
+                DexterCleanUp();
+                return false;
             }
 
             return true;
         }
 
-        // DexterApp::ShutDown()
-        internal void ShutDown()
-        {
-            if (!_dexterActive)
-            {
-                return;
-            }
+        // --------------------------------------------------------------------
+        // DexterOSMain (DexterApp::DexterOSMain)
+        // --------------------------------------------------------------------
 
-            // Original: ThreadEnd(1..4) then GFXShutDown + SoundShutDown.
-            _os.ThreadEnd(1);
-            _os.ThreadEnd(2);
-            _os.ThreadEnd(3);
-            _os.ThreadEnd(4);
-
-            _gfxShutDownCallback?.Invoke();
-
-            _soundShutDownCallback?.Invoke();
-
-            _dexterActive = false;
-        }
-
-        // DexterApp::DexterAppConfig()
-        internal void DexterAppConfig()
-        {
-            string appDataPath = Environment.CurrentDirectory;
-            DexterFile.SetStoragePath(appDataPath);
-
-            _gfx.SetAppRefresh(0x28);
-            _gfx.HideMousePointer();
-
-            bool english = false; // OSGeneric.IsEnglish();
-            string title = english ? "Cultures: 8th Wonder of the World" : "Cultures: Das Achte Weltwunder";
-            _os.SetAppTitle(title, title);
-
-            DexterDebug.SetDebugMode(0);
-            DexterMemory.SetMaxMallocs(10000);
-            // DexterAudio.SetSoundMode(0x02, 0x10, 0x5622);
-            DexterFile.SetFileBufferSize(10000);
-        }
-
-        // DexterApp::DexterCleanUp()
-        internal void DexterCleanUp()
-        {
-            // Original: DexterAppExit callback.
-            _exitCallback?.Invoke();
-
-            // Original: free Zone[] and reset MaxZones.
-            _zones = null;
-            _maxZones = 0;
-
-            // Original: DexterFile::FileSystemShutDown(); (not present in current C# set)
-            // If a managed filesystem subsystem exists, it should be shut down here.
-
-            DexterMemory.MemorySystemShutDown();
-            DexterMemory.FreeHeap();
-
-            // Original: DexterOS::ThreadRelease(0); (ensure 0 is actually handled in DexterOS)
-            _os.ThreadRelease(0);
-
-            // Original: OSGeneric::CleanUp(); (not present in current C# set)
-            // If an OSGeneric cleanup exists, it should be called here.
-        }
-
-        // DexterApp::DexterOSMain()
-        // In the original, this loop called DexterOS::OSUpdate() (SDL pump) and only ran MainThread when no events were pending.
-        // This port keeps that behavior via an injected callback to avoid hard-coding an SDL implementation here.
-        internal void DexterOSMainLoop()
+        internal static void DexterOSMain()
         {
             while (AppContinue)
             {
-                bool processedEvent = _osUpdateCallback != null && _osUpdateCallback();
-                if (!processedEvent)
+                bool hadEvent = DexterOS.OSUpdate();
+                if (!hadEvent)
                 {
-                    // Original: DexterAudio::SoundUpdate();
-                    _soundUpdateCallback?.Invoke();
-
-                    MainThreadTick();
+                    DexterAudio.SoundUpdate();
+                    MainThread();
                 }
             }
 
-            ShutDown();
-            DexterCleanUp();
-        }
-
-        // DexterApp::MainThread()
-        internal bool MainThreadTick()
-        {
-            if (!AppContinue)
+            // Post-loop cleanup matches cxx.
+            if (DexterActive)
             {
-                return false;
+                DexterOS.ThreadEnd(1);
+                DexterOS.ThreadEnd(2);
+                DexterOS.ThreadEnd(3);
+                DexterOS.ThreadEnd(4);
+                GFX.GFXShutDown();
+                DexterAudio.SoundShutDown();
+                DexterActive = false;
             }
 
-            int beginTicks = unchecked((int)_osEnvironment.Time());
+            DexterAppExitCallBack?.Invoke();
 
-            OSGeneric.RelaxThread();
-            _mainCallback();
-
-            int callbackTimeMs = _getCallbackTimeMs != null ? _getCallbackTimeMs() : 0;
-
-            // Original had sentinels: 0x7777 => ended, 0x6666 => skip fps update.
-            if (callbackTimeMs == 0x7777)
+            if (Zone != null)
             {
-                ApplicationEnded();
-                return false;
+                Zone = null;
+                MaxZones = 0;
             }
 
-            if (callbackTimeMs == 0x6666)
+            DexterFile.FileSystemShutDown();
+            DexterMemory.MemorySystemShutDown();
+            DexterMemory.FreeHeap();
+            DexterOS.ThreadRelease(0);
+            OSGeneric.CleanUp();
+        }
+
+        // --------------------------------------------------------------------
+        // DistanceExact / Distance
+        // --------------------------------------------------------------------
+
+        internal static long DistanceExact(int x1, int y1, int x2, int y2)
+        {
+            int ax = x1;
+            int bx = x2;
+            if (ax < bx)
             {
-                _onFpsSample?.Invoke();
-                return AppContinue;
+                (bx, ax) = (ax, bx);
             }
 
-            int endTicks = unchecked((int)_osEnvironment.Time());
-            int frameTime = unchecked(endTicks - beginTicks);
-
-            // Hook for FPS/debug sampling.
-            _onFpsSample?.Invoke();
-
-            if (callbackTimeMs > 0 && frameTime < callbackTimeMs)
+            int ay = y1;
+            int by = y2;
+            if (ay < by)
             {
-                do
-                {
-                    OSGeneric.RelaxThread();
-                    endTicks = unchecked((int)_osEnvironment.Time());
-                    frameTime = unchecked(endTicks - beginTicks);
-                } while (frameTime < callbackTimeMs);
+                (by, ay) = (ay, by);
             }
 
-            return AppContinue;
-        }
+            uint dx = unchecked((uint)(ax - bx));
+            uint dy = unchecked((uint)(ay - by));
 
-        // DexterApp::ApplicationEnded()
-        internal void ApplicationEnded()
-        {
-            AppContinue = false;
-        }
-
-        // DexterApp::MemoryUsageReport() (empty in original)
-        internal void MemoryUsageReport()
-        {
-        }
-
-        // DexterApp::Abort() (empty in original)
-        internal void Abort()
-        {
-        }
-
-        internal void SetFullScreenKey(uint value)
-        {
-            _fullScreenKeyVal = value;
-        }
-
-        internal void SetNormalWindowKey(uint value)
-        {
-            _normalWindowKeyVal = value;
-        }
-
-        internal void SetDoubleWindowKey(uint value)
-        {
-            _doubleWindowKeyVal = value;
-        }
-
-        internal uint FullScreenKey()
-        {
-            return _fullScreenKeyVal;
-        }
-
-        internal uint NormalWindowKey()
-        {
-            return _normalWindowKeyVal;
-        }
-
-        internal uint DoubleWindowKey()
-        {
-            return _doubleWindowKeyVal;
-        }
-
-        // ------------------------------------------------------------
-        // RNG
-        // ------------------------------------------------------------
-
-        internal int Rand()
-        {
-            float u = NextUnitFloat();
-            float value = u * 32767.0f;
-            return (int)value;
-        }
-
-        internal int RRand(int minInclusive, int maxInclusive)
-        {
-            if (minInclusive > maxInclusive)
-            {
-                (maxInclusive, minInclusive) = (minInclusive, maxInclusive);
-            }
-
-            float u = NextUnitFloat();
-
-            // (max - min + 1) is inclusive range.
-            float span = (maxInclusive - minInclusive) + 1.0f;
-            float value = minInclusive + (u * span);
-
-            int result = (int)value;
-            if (value > maxInclusive)
-            {
-                result = maxInclusive;
-            }
-
-            return result;
-        }
-
-        internal uint RandomValue(uint maxValue)
-        {
-            if (maxValue == 0)
-            {
-                return 0;
-            }
-
-            float u = NextUnitFloat();
-            uint scaled = (uint)(u * maxValue);
-
-            // Match original's edge handling: never return maxValue.
-            if (scaled == maxValue)
-            {
-                return maxValue - 1;
-            }
-
-            return scaled;
-        }
-
-        internal void Randomize(int seed)
-        {
-            // The original clamps the seed into a 0..31999 range with wrap behavior.
-            int normalized = seed;
-            if (normalized < 0)
-            {
-                normalized = 0;
-            }
-
-            if (normalized > 31999)
-            {
-                normalized %= 32000;
-            }
-
-            // The original derives 4 internal seeds (i,j,k,l) from the normalized value.
-            // This mirrors the classic RANMAR initialization using (ij, kl).
-            int ij = normalized;
-            int kl = 32000 - ij;
-
-            int i = ((ij / 177) % 177) + 2;
-            int j = (ij % 177) + 2;
-
-            int k = (kl / 169) + 1;
-            int l = (kl % 169);
-
-            for (int idx = 0; idx < 0x61; idx++)
-            {
-                float s = 0.0f;
-                float t = 0.5f;
-
-                for (int n = 0; n < 24; n++)
-                {
-                    int m = (((i * j) % 179) * k) % 179;
-                    i = j;
-                    j = k;
-                    k = m;
-
-                    l = ((l * 53) + 1) % 169;
-
-                    int prod = (short)m * (short)l;
-                    int prodAdj = prod >= 0 ? prod : (prod + 63);
-
-                    if (((short)(prod - (prodAdj & unchecked((short)0xFFC0)))) > 31)
-                    {
-                        s += t;
-                    }
-
-                    t *= 0.5f;
-                }
-
-                _randomU[idx] = s;
-            }
-
-            // Indices correspond to i97=97, j97=33 in 1-based notation.
-            _i97 = 0x60;
-            _j97 = 0x20;
-
-            _c = 362436.0 / 16777216.0;
-        }
-
-        internal void RandomPush()
-        {
-            if (_randomStackPos >= _randomStack.Length)
-            {
-                return;
-            }
-
-            RandomState state = new(_randomU, _i97, _j97, _c);
-            _randomStack[_randomStackPos] = state;
-            _randomStackPos++;
-        }
-
-        internal void RandomPop()
-        {
-            if (_randomStackPos <= 0)
-            {
-                return;
-            }
-
-            _randomStackPos--;
-            RandomState state = _randomStack[_randomStackPos];
-
-            Array.Copy(state.U, _randomU, _randomU.Length);
-            _i97 = state.I97;
-            _j97 = state.J97;
-            _c = state.C;
-        }
-
-        private float NextUnitFloat()
-        {
-            float uni = _randomU[_i97] - _randomU[_j97];
-            if (uni < 0.0f)
-            {
-                uni += 1.0f;
-            }
-
-            _randomU[_i97] = uni;
-
-            _i97--;
-            if (_i97 < 0)
-            {
-                _i97 = 0x60;
-            }
-
-            _j97--;
-            if (_j97 < 0)
-            {
-                _j97 = 0x60;
-            }
-
-            _c -= _cd;
-            if (_c < 0.0)
-            {
-                _c += _cm;
-            }
-
-            float result = uni - (float)_c;
-            if (result < 0.0f)
-            {
-                result += 1.0f;
-            }
-
-            return result;
-        }
-
-        // ------------------------------------------------------------
-        // Math helpers
-        // ------------------------------------------------------------
-
-        internal double SquareRoot(double value)
-        {
-            return OSGeneric.SystemSquareRoot(value);
-        }
-
-        internal long DistanceExact(int x1, int y1, int x2, int y2)
-        {
-            int dx = x2 - x1;
-            int dy = y2 - y1;
-
-            double dist = OSGeneric.SystemSquareRoot((double)(dx * dx + dy * dy));
+            double dist = OSGeneric.SystemSquareRoot(dx * dx + dy * dy);
             return (long)dist;
         }
 
-        // Original uses an approximation (fast distance).
-        internal int Distance(int x1, int y1, int x2, int y2)
+        internal static int Distance(int x1, int y1, int x2, int y2)
         {
-            uint dx = (uint)Math.Abs(x2 - x1);
-            uint dy = (uint)Math.Abs(y2 - y1);
+            int ax = x1;
+            int bx = x2;
+            if (ax < bx)
+            {
+                (bx, ax) = (ax, bx);
+            }
+
+            int ay = y1;
+            int by = y2;
+            if (ay < by)
+            {
+                (by, ay) = (ay, by);
+            }
+
+            uint dx = unchecked((uint)(ax - bx));
+            uint dy = unchecked((uint)(ay - by));
 
             uint max = dx;
             uint min = dy;
@@ -530,181 +337,285 @@
             }
 
             uint minScaled = (min >> 1) + min;
-
-            // Same bit-shift approximation as the decompiled code.
-            return (int)((minScaled >> 2) + (max - ((max >> 7) + (max >> 5))) + (minScaled >> 6));
+            return unchecked((int)((minScaled >> 2) + (max - ((max >> 7) + (max >> 5))) + (minScaled >> 6)));
         }
 
-        // ------------------------------------------------------------
-        // Zones
-        // ------------------------------------------------------------
+        // --------------------------------------------------------------------
+        // MainThread / ApplicationEnded
+        // --------------------------------------------------------------------
 
-        internal bool ValidZoneId(short zoneId)
+        internal static void MainThread()
         {
-            if (zoneId < 0)
-            {
-                return false;
-            }
-
-            if (zoneId >= _maxZones)
-            {
-                return false;
-            }
-
-            return _zones != null;
-        }
-
-        internal void SetMaxZones(short maxZones)
-        {
-            // Preserve original: once allocated, it cannot be changed.
-            if (_zones != null)
+            if (!AppContinue)
             {
                 return;
             }
 
-            _maxZones = maxZones;
-            if (_maxZones > 0)
-            {
-                _zones = new ZoneEntry[_maxZones];
-            }
-        }
+            int t0 = unchecked((int)OSEnvironment.Time());
+            int reset0 = DexterOS.TimeCheckReset;
 
-        internal void ZoneFree(short zoneId)
-        {
-            if (!ValidZoneId(zoneId))
+            OSGeneric.RelaxThread();
+
+            DexterMainCallBack?.Invoke();
+
+            // Sentinels from decompile
+            int cb = unchecked((int)GFX.CallBackTime);
+            if (cb == 0x7777)
             {
+                ApplicationEnded();
                 return;
             }
 
-            _zones![zoneId] = _zones[zoneId].WithActive(false);
-        }
-
-        internal void AddZone(short zoneId, short x, short y, ushort width, ushort height)
-        {
-            if (!ValidZoneId(zoneId))
+            if (cb == 0x6666)
             {
+                DexterDebug.UpdateFPS(0);
                 return;
             }
 
-            int left = x;
-            int top = y;
-            int right = x + width;
-            int bottom = y + height;
+            int t1 = unchecked((int)OSEnvironment.Time());
 
-            _zones![zoneId] = new ZoneEntry(left, top, right, bottom, true);
-        }
+            // iVar3 = (t1 + (reset0 - t0)) - TimeCheckReset;
+            int frameMs = unchecked((t1 + (reset0 - t0)) - DexterOS.TimeCheckReset);
 
-        internal bool ZoneHit(short zoneId, ushort x, ushort y)
-        {
-            if (!ValidZoneId(zoneId))
+            DexterDebug.UpdateFPS(frameMs);
+
+            if (frameMs < cb)
             {
-                return false;
-            }
-
-            ZoneEntry zone = _zones![zoneId];
-            if (!zone.Active)
-            {
-                return false;
-            }
-
-            int px = x;
-            int py = y;
-
-            return zone.Left <= px && px <= zone.Right && zone.Top <= py && py <= zone.Bottom;
-        }
-
-        internal void InitZones()
-        {
-            if (_zones == null || _maxZones < 1)
-            {
-                return;
-            }
-
-            for (int i = 0; i < _zones.Length; i++)
-            {
-                _zones[i] = _zones[i].WithActive(false);
-            }
-        }
-
-        // mode: when 1, return the last matching zone; otherwise return the first match.
-        internal int ZoneFind(ushort x, ushort y, byte mode)
-        {
-            if (_zones == null || _maxZones < 1)
-            {
-                return -1;
-            }
-
-            int found = -1;
-            int px = x;
-            int py = y;
-
-            for (int i = 0; i < _zones.Length; i++)
-            {
-                ZoneEntry zone = _zones[i];
-                if (!zone.Active)
+                do
                 {
-                    continue;
+                    OSGeneric.RelaxThread();
+                    t1 = unchecked((int)OSEnvironment.Time());
+                    frameMs = unchecked((t1 + (reset0 - t0)) - DexterOS.TimeCheckReset);
+                } while (frameMs < cb);
+            }
+        }
+
+        internal static void ApplicationEnded()
+        {
+            AppContinue = false;
+        }
+
+        // --------------------------------------------------------------------
+        // DexterAppConfig / Install / Shutdown (free functions in cxx)
+        // --------------------------------------------------------------------
+
+        internal static bool DefaultDexterAppInstall()
+        {
+            DexterFile.XMLInit();
+            DexterFile.XMLSetString("ScreenMode", "FullScreen");
+            DexterFile.XMLSetValue("ScreenWidth", GFX.WindowWidth);
+            DexterFile.XMLSetValue("ScreenHeight", GFX.WindowHeight);
+
+            DexterFile.XMLLoad("config.xml", (byte)' ');
+
+            if (GFX.WindowWidth < 0x400 || GFX.WindowHeight < 0x300)
+            {
+                DexterFile.XMLSetValue("ScreenWidth", 800);
+                DexterFile.XMLSetValue("ScreenHeight", 600);
+            }
+            else
+            {
+                if (DexterOS.HasCommandLine("--lowres") || DexterOS.HasCommandLine("-l"))
+                {
+                    DexterFile.XMLSetValue("ScreenWidth", 800);
+                    DexterFile.XMLSetValue("ScreenHeight", 600);
                 }
+            }
 
-                if (zone.Left <= px && px <= zone.Right && zone.Top <= py && py <= zone.Bottom)
+            if (GFX.WindowWidth < 800 || GFX.WindowHeight < 600)
+            {
+                DexterFile.XMLSetValue("ScreenWidth", 0x280);
+                DexterFile.XMLSetValue("ScreenHeight", 0x1e0);
+            }
+
+            if (DexterOS.HasCommandLine("--nosound") || DexterOS.HasCommandLine("-s"))
+            {
+                DexterAudio.UseSoundStatus = false;
+            }
+
+            if (DexterOS.HasCommandLine("--windowed") || DexterOS.HasCommandLine("-w"))
+            {
+                DexterFile.XMLSetString("ScreenMode", "Windowed");
+            }
+
+            if (DexterOS.HasCommandLine("--fullscreen") || DexterOS.HasCommandLine("-f"))
+            {
+                DexterFile.XMLSetString("ScreenMode", "Fullscreen");
+            }
+
+            int preferWidth = (int)DexterFile.XMLGetValue("ScreenWidth");
+            int preferHeight = (int)DexterFile.XMLGetValue("ScreenHeight");
+
+            bool windowed = DexterFile.XMLCompareString("ScreenMode", "Windowed");
+            bool preferFullscreen = !windowed;
+
+            DexterFile.MakeDir("singleplayer", (byte)' ');
+            DexterFile.MakeDir("singleplayer/savegames", (byte)' ');
+
+            GFX.SetScreenMode((ushort)preferWidth, (ushort)preferHeight, 0x10, (byte)(0x02 - (preferFullscreen ? 0 : 1)));
+            return true;
+        }
+
+        internal static bool DefaultDexterAppShutdown()
+        {
+            DexterFile.XMLSave("config.xml", (byte)'!');
+            return true;
+        }
+
+        internal static void DexterAppConfig()
+        {
+            string appDataPath = GetApplicationDataPath();
+            DexterFile.SetStoragePath(appDataPath);
+
+            GFX.SetAppRefresh(0x28);
+            GFX.HideMousePointer();
+
+            bool english = IsEnglish();
+
+            string titleA = english ? "Cultures: 8th Wonder of the World" : "Cultures: Das Achte Weltwunder";
+            string titleB = english ? "Cultures: 8th Wonder of the World" : "Cultures: Das Achte Weltwunder";
+
+            DexterOS.SetAppTitle(titleB, titleA);
+
+            DexterDebug.SetDebugMode(0);
+            DexterMemory.SetMaxMallocs(10000);
+            DexterAudio.SetSoundMode(0x02, 0x10, 0x5622);
+            DexterFile.SetFileBufferSize(10000);
+
+            // Match cxx: set default install/exit functions here.
+            SetInstallFunction(DefaultDexterAppInstall);
+            SetExitFunction(DefaultDexterAppShutdown);
+        }
+
+        internal static void SetInstallFunction(BoolCallback callback)
+        {
+            DexterAppInstallCallBack = callback;
+        }
+
+        internal static void SetExitFunction(BoolCallback callback)
+        {
+            DexterAppExitCallBack = callback;
+        }
+
+        // --------------------------------------------------------------------
+        // Helpers that were external in the cxx (stubs; wire to your OS layer as needed)
+        // --------------------------------------------------------------------
+
+        private static string GetApplicationDataPath()
+        {
+            // cxx: _get_application_data_path()
+            // Prefer the per-user appdata directory; fallback to current directory.
+            try
+            {
+                string? p = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                if (!string.IsNullOrEmpty(p))
                 {
-                    found = i;
-                    if (mode != 1)
+                    return p;
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+
+            try
+            {
+                return Environment.CurrentDirectory;
+            }
+            catch
+            {
+                return ".";
+            }
+        }
+
+        private static bool IsEnglish()
+        {
+            // cxx: IsEnglish()
+            // Keep it simple; wire to real language selection if available.
+            return false;
+        }
+
+        private static bool DexterAppSetup()
+        {
+            // cxx: DexterAppSetup() is called unconditionally and must return bool.
+            // If a callback is provided, use it; otherwise succeed.
+            if (DexterAppSetupCallBack != null)
+            {
+                return DexterAppSetupCallBack();
+            }
+
+            return true;
+        }
+
+        // --------------------------------------------------------------------
+        // Random table init (DexterApp::DexterApp)
+        // --------------------------------------------------------------------
+
+        private static void BuildRandomTable()
+        {
+            int iVar9 = 2;
+            int iVar3 = 3;
+            int iVar5 = 0x0c;
+            int iVar6 = 0x3a;
+
+            for (int idx = 0; idx < 0x61; idx++)
+            {
+                float fVar11 = 0.0f;
+                int iVar7 = 0x18;
+                float fVar12 = 0.5f;
+
+                int iVar10 = iVar9;
+                int iVar2 = iVar3;
+
+                while (iVar7 != 0)
+                {
+                    iVar3 = iVar5;
+                    iVar9 = iVar2;
+
+                    iVar5 = (((iVar10 * iVar9) % 0xb3) * iVar3) % 0xb3;
+                    iVar6 = (iVar6 * 0x35 + 1) % 0xa9;
+
+                    short uVar1 = unchecked((short)(iVar5 * iVar6));
+                    short uVar4 = unchecked((short)(uVar1 + 0x3f));
+                    if (uVar1 >= 0)
                     {
-                        break;
+                        uVar4 = uVar1;
                     }
+
+                    short masked = unchecked((short)(uVar4 & unchecked((short)0xFFC0)));
+                    short diff = unchecked((short)(uVar1 - masked));
+
+                    if (diff > 0x1f)
+                    {
+                        fVar11 += fVar12;
+                    }
+
+                    fVar12 *= 0.5f;
+
+                    iVar7--;
+                    iVar10 = iVar9;
+                    iVar2 = iVar3;
                 }
+
+                Random[idx] = fVar11;
             }
 
-            return found;
+            // The constructor sets these globals too (overlap warnings in decompile).
+            RandomC = 362436.0 / 16777216.0;
+            RandomI97 = 0x60;
+            RandomJ97 = 0x20;
         }
 
-        internal int MouseZone(byte mode)
+        // --------------------------------------------------------------------
+        // Zone storage layout (0x14 bytes in cxx)
+        // --------------------------------------------------------------------
+
+        internal struct DexZone
         {
-            int px = _os.MouseX;
-            int py = _os.MouseY;
-
-            return ZoneFind((ushort)px, (ushort)py, mode);
-        }
-
-        private readonly struct RandomState
-        {
-            internal RandomState(float[] u, int i97, int j97, double c)
-            {
-                U = new float[u.Length];
-                Array.Copy(u, U, u.Length);
-                I97 = i97;
-                J97 = j97;
-                C = c;
-            }
-
-            internal float[] U { get; }
-            internal int I97 { get; }
-            internal int J97 { get; }
-            internal double C { get; }
-        }
-
-        private readonly struct ZoneEntry
-        {
-            internal ZoneEntry(int left, int top, int right, int bottom, bool active)
-            {
-                Left = left;
-                Top = top;
-                Right = right;
-                Bottom = bottom;
-                Active = active;
-            }
-
-            internal int Left { get; }
-            internal int Top { get; }
-            internal int Right { get; }
-            internal int Bottom { get; }
-            internal bool Active { get; }
-
-            internal ZoneEntry WithActive(bool active)
-            {
-                return new ZoneEntry(Left, Top, Right, Bottom, active);
-            }
+            // Matches 0x14 bytes: 8 + 8 + 1 + padding
+            internal ulong A;
+            internal ulong B;
+            internal byte Active;
         }
     }
 }

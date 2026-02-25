@@ -94,9 +94,12 @@ namespace OpenVikings.NC2InGameGuiManager
         private NXBaseGui.CBaseWindow? _wndSelWallBuild;
 
         // Lists (C++ has multiple CListBase blocks: +0x188 action elements list, +0xb8 world displays, +0xe0 observation windows)
-        private readonly CListBase _actionElementsList;
-        private readonly CListBase _worldDisplayList;
-        private readonly CListBase _observationWindowList;
+        private readonly CListBase<NXBaseGui.CBaseElement> _actionElementsList;
+        private readonly CListBase<NC2InGameGuiWorldElement.CWorldDisplayElement> _worldDisplayList;
+        private readonly CListBase<NXBaseGui.CBaseWindow> _observationWindowList;
+        private readonly CListBase<NXBaseGui.CBaseElement> _actionButtonsList;
+        private readonly CListBase<NXBaseGui.CBaseElement> _selectionActionButtonsList;
+        private readonly CListBase<NXBaseGui.CBaseElement> _frameCallList;
 
         // Frame rate calc (this + 0x1f8)
         private readonly CFrameRateCalculator _frameRateCalculator;
@@ -108,10 +111,6 @@ namespace OpenVikings.NC2InGameGuiManager
         private readonly NC2InGameGuiBaseTextInputElement.CStringInputHandler _stringInputHandler;
 
         private bool _disposed;
-
-        // Matches the decompile pattern: the "action buttons" are tracked in this list and must be deleted from the desktop.
-        // (CListBase is assumed to store CBaseElement references.)
-        private readonly CListBase _actionButtonsList; // (this + 0x188)
 
         // Checksum used by l_Selection_ActionButtons_CheckUpdate() (Part 1).
         private uint _actionButtonsChecksum; // (this + 0x1b0)
@@ -142,21 +141,12 @@ namespace OpenVikings.NC2InGameGuiManager
             0x00000000u
         ];
 
-        // 0x188
-        private readonly CListBase _selectionActionButtonsList;
-
-        // 0x1B0
-        private uint _selectionActionButtonsChecksum;
-
         // 0x1B4 / 0x1B8 (mouse position snapshot when menu was opened)
         private int _selectionActionButtonsMouseX;
         private int _selectionActionButtonsMouseY;
 
         // 0x290
         private readonly NC2InGameGuiManagerDefaultMessageHandlerElement.CGuiManagerDefaultMessageHandlerElement _defaultMessageHandler;
-
-        // 0x90
-        private readonly CListBase _frameCallList;
 
         // 0x80 / 0x88
         private NXBaseGui.CBaseWindow? _overviewWindowPtr;
@@ -180,9 +170,13 @@ namespace OpenVikings.NC2InGameGuiManager
             // C++: SGuiElementPtr ctor at (this+8) and list base at (this+0x188), plus more.
             // In managed code, explicit fields are initialized here.
 
-            _actionElementsList = new CListBase(false);
-            _worldDisplayList = new CListBase(false);
-            _observationWindowList = new CListBase(false);
+            _actionElementsList = new CListBase<NXBaseGui.CBaseElement>(false);
+            _worldDisplayList = new CListBase<NC2InGameGuiWorldElement.CWorldDisplayElement>(false);
+            _observationWindowList = new CListBase<NXBaseGui.CBaseWindow>(false);
+
+            _actionButtonsList = new CListBase<NXBaseGui.CBaseElement>(false);
+            _selectionActionButtonsList = new CListBase<NXBaseGui.CBaseElement>(false);
+            _frameCallList = new CListBase<NXBaseGui.CBaseElement>(false);
 
             _frameRateCalculator = new NXSysTime.CFrameRateCalculator();
             _defaultMessageHandlerElement = new NC2InGameGuiManagerElements.CGuiManagerDefaultMessageHandlerElement();
@@ -454,12 +448,12 @@ namespace OpenVikings.NC2InGameGuiManager
             }
 
             // Remove all elements from the action element list and delete them from the desktop.
-            NXBaseGui.CBaseElement? element = _actionElementsList.l_Base_GetStartElement<NXBaseGui.CBaseElement>();
+            NXBaseGui.CBaseElement? element = _actionElementsList.l_Base_GetStartElement();
             while (element != null)
             {
                 _actionElementsList.l_Base_RemoveElement(element);
                 NXBaseGui.CDesktop.Element_Delete(NXBaseGui.CDesktop.sTheObjectPtr, element);
-                element = _actionElementsList.l_Base_GetStartElement<NXBaseGui.CBaseElement>();
+                element = _actionElementsList.l_Base_GetStartElement();
             }
 
             _selectionActionButtonsChecksum = 0;
@@ -893,12 +887,12 @@ namespace OpenVikings.NC2InGameGuiManager
         internal void l_Selection_RemoveAllGuiElements()
         {
             // Remove all action elements
-            NXBaseGui.CBaseElement? element = _actionElementsList.l_Base_GetStartElement<NXBaseGui.CBaseElement>();
+            NXBaseGui.CBaseElement? element = _actionElementsList.l_Base_GetStartElement();
             while (element != null)
             {
                 _actionElementsList.l_Base_RemoveElement(element);
                 NXBaseGui.CDesktop.Element_Delete(NXBaseGui.CDesktop.sTheObjectPtr, element);
-                element = _actionElementsList.l_Base_GetStartElement<NXBaseGui.CBaseElement>();
+                element = _actionElementsList.l_Base_GetStartElement();
             }
 
             _selectionActionButtonsChecksum = 0;
@@ -1126,13 +1120,14 @@ namespace OpenVikings.NC2InGameGuiManager
             _observationWindowList.l_Base_RemoveElement(wnd);
         }
 
-        internal void ObservationWindow_CloseAll()
+        private void ClearAndDeleteActionButtonElements()
         {
-            NXBaseGui.CBaseWindow? wnd = _observationWindowList.l_Base_GetStartElement<NXBaseGui.CBaseWindow>();
-            while (wnd != null)
+            NXBaseGui.CBaseElement? element = _actionButtonsList.l_Base_GetStartElement();
+            while (element != null)
             {
-                NXBaseGui.CDesktop.Window_AddToCloseList(NXBaseGui.CDesktop.sTheObjectPtr, wnd);
-                wnd = _observationWindowList.l_Base_GetNextElement<NXBaseGui.CBaseWindow>(wnd);
+                _actionButtonsList.l_Base_RemoveElement(element);
+                NXBaseGui.CDesktop.Element_Delete(NXBaseGui.CDesktop.sTheObjectPtr, element);
+                element = _actionButtonsList.l_Base_GetStartElement();
             }
         }
 

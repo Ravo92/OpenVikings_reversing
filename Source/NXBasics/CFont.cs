@@ -25,6 +25,11 @@ namespace OpenVikings.NXBasics
         private const int FirstPrintableChar = 0x20;
         private const uint SpaceBobId = 0x49u;
 
+        internal void SetSpacing(int spacing)
+        {
+            _spacing = spacing;
+        }
+
         // NXBasics::CFont::CFont()
         internal CFont()
         {

@@ -5377,18 +5377,18 @@ namespace OpenVikings.NXBasics
             Remap(remapTable, rect);
         }
 
-        private static ushort ReadUInt16LittleEndian(byte[] buffer, int offset)
+        internal static ushort ReadUInt16LittleEndian(byte[] buffer, int offset)
         {
             return (ushort)(buffer[offset] | (buffer[offset + 1] << 8));
         }
 
-        private static void WriteUInt16LittleEndian(byte[] buffer, int offset, ushort value)
+        internal static void WriteUInt16LittleEndian(byte[] buffer, int offset, ushort value)
         {
             buffer[offset] = (byte)(value & 0xFF);
             buffer[offset + 1] = (byte)((value >> 8) & 0xFF);
         }
 
-        private static uint ReadUInt32LittleEndian(byte[] buffer, int offset)
+        internal static uint ReadUInt32LittleEndian(byte[] buffer, int offset)
         {
             return (uint)(
                 buffer[offset] |
@@ -5397,7 +5397,7 @@ namespace OpenVikings.NXBasics
                 (buffer[offset + 3] << 24));
         }
 
-        private static void WriteUInt32LittleEndian(byte[] buffer, int offset, uint value)
+        internal static void WriteUInt32LittleEndian(byte[] buffer, int offset, uint value)
         {
             buffer[offset] = (byte)(value & 0xFF);
             buffer[offset + 1] = (byte)((value >> 8) & 0xFF);
@@ -5630,7 +5630,6 @@ namespace OpenVikings.NXBasics
             Tool_Darken(rect);
         }
 
-        // NXBasics::CBitmap::Tool_Darken(NXBasics::SRectangle) const
         // NXBasics::CBitmap::Tool_Darken(NXBasics::SRectangle) const
         internal void Tool_Darken(SRectangle rect)
         {

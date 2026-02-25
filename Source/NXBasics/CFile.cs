@@ -1,11 +1,12 @@
 ﻿using OpenVikings.Dexter;
+using OpenVikings.Dexter.Struct;
 
 namespace OpenVikings.NXBasics
 {
     internal sealed class CFile : IDisposable
     {
         // Replaces: private IntPtr _fileHandle;
-        private DexterFile.FileHandle _fileHandle;
+        private FileHandle _fileHandle;
 
         // Library support (container stream + relative addressing)
         private long _libraryBaseOffset;
@@ -140,7 +141,7 @@ namespace OpenVikings.NXBasics
         // NXBasics::CFile::l_InitObject()
         internal void L_InitObject()
         {
-            _fileHandle = new DexterFile.FileHandle(0);
+            _fileHandle = new FileHandle(0);
 
             DexterMemory.MemorySet(_fileName, 0, _fileName.Length);
 
@@ -155,7 +156,7 @@ namespace OpenVikings.NXBasics
             if (_fileHandle.IsValid)
             {
                 DexterFile.FileClose(_fileHandle);
-                _fileHandle = new DexterFile.FileHandle(0);
+                _fileHandle = new FileHandle(0);
                 _libraryId = -1;
             }
         }
@@ -193,7 +194,7 @@ namespace OpenVikings.NXBasics
             if (_fileHandle.IsValid)
             {
                 DexterFile.FileClose(_fileHandle);
-                _fileHandle = new DexterFile.FileHandle(0);
+                _fileHandle = new FileHandle(0);
                 _libraryId = -1;
             }
 
@@ -331,7 +332,7 @@ namespace OpenVikings.NXBasics
 
             if (library.File == null)
             {
-                _fileHandle = new DexterFile.FileHandle(0);
+                _fileHandle = new FileHandle(0);
                 return false;
             }
 
@@ -339,7 +340,7 @@ namespace OpenVikings.NXBasics
 
             if (!DexterFile.FileExists(libraryContainerPath, mode))
             {
-                _fileHandle = new DexterFile.FileHandle(0);
+                _fileHandle = new FileHandle(0);
                 return false;
             }
 
@@ -350,7 +351,7 @@ namespace OpenVikings.NXBasics
             }
 
             int pos = unchecked(CSimpleFileLibrary.GetFileInLibraryPosition(library, _fileName));
-            DexterFile.FileSeek(_fileHandle, pos, 0);
+            DexterFile.FileSeek(_fileHandle, pos);
 
             _libraryId = libraryIndex;
             return true;
@@ -384,7 +385,7 @@ namespace OpenVikings.NXBasics
                 }
             }
 
-            DexterFile.FileSeek(_fileHandle, position, 0);
+            DexterFile.FileSeek(_fileHandle, position);
         }
 
 
@@ -394,7 +395,7 @@ namespace OpenVikings.NXBasics
             if (_fileHandle.IsValid)
             {
                 DexterFile.FileClose(_fileHandle);
-                _fileHandle = new DexterFile.FileHandle(0);
+                _fileHandle = new FileHandle(0);
                 _libraryId = -1;
             }
 
@@ -434,7 +435,7 @@ namespace OpenVikings.NXBasics
                 return 0;
             }
 
-            return DexterFile.FileRead(_fileHandle, buffer, 0, size, 0);
+            return DexterFile.FileRead(_fileHandle, buffer, 0, size);
         }
 
         // Managed helper (not in original): read into buffer starting at offset
@@ -457,7 +458,7 @@ namespace OpenVikings.NXBasics
                 throw new ArgumentException("Buffer too small for requested read.");
             }
 
-            return DexterFile.FileRead(_fileHandle, buffer, bufferOffset, size, 0);
+            return DexterFile.FileRead(_fileHandle, buffer, bufferOffset, size);
         }
 
         private static bool TryReadExact(Stream stream, int size, out byte[] buffer)
