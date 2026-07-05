@@ -1,4 +1,5 @@
 ﻿using OpenVikings.Dexter;
+using OpenVikings.NC2InGameGuiBase;
 using OpenVikings.NC2Logic;
 using OpenVikings.NXBasics;
 using OpenVikings.NXSys;
@@ -62,18 +63,18 @@ namespace OpenVikings.NC2InGameGuiManager
         private NC2InGameGuiBase.CBaseToolGfxElement? _toolBackground;
 
         // Various toolbar buttons (0x20..0x78 + 0x68 speed + 0x78 priority)
-        private NC2InGameGuiBase.CBaseToolGfxButton? _btnHelp;      // +0x20 (string id 1)
-        private NC2InGameGuiBase.CBaseToolGfxButton? _btnButton2;   // +0x28
-        private NC2InGameGuiBase.CBaseToolGfxButton? _btnButton5;   // +0x30
-        private NC2InGameGuiBase.CBaseToolGfxButton? _btnButton4;   // +0x38
-        private NC2InGameGuiBase.CBaseToolGfxButton? _btnButton6;   // +0x40
-        private NC2InGameGuiBase.CBaseToolGfxButton? _btnButton7;   // +0x48
-        private NC2InGameGuiBase.CBaseToolGfxButton? _btnButton3;   // +0x50
-        private NC2InGameGuiBase.CBaseToolGfxButton? _btnButton8;   // +0x58
-        private NC2InGameGuiBase.CBaseToolGfxButton? _btnButton0;   // +0x60
-        private NC2InGameGuiBase.CBaseToolGfxButton? _btnSpeed;     // +0x68
+        private CBaseToolGfxButton? _btnHelp;      // +0x20 (string id 1)
+        private CBaseToolGfxButton? _btnButton2;   // +0x28
+        private CBaseToolGfxButton? _btnButton5;   // +0x30
+        private CBaseToolGfxButton? _btnButton4;   // +0x38
+        private CBaseToolGfxButton? _btnButton6;   // +0x40
+        private CBaseToolGfxButton? _btnButton7;   // +0x48
+        private CBaseToolGfxButton? _btnButton3;   // +0x50
+        private CBaseToolGfxButton? _btnButton8;   // +0x58
+        private CBaseToolGfxButton? _btnButton0;   // +0x60
+        private CBaseToolGfxButton? _btnSpeed;     // +0x68
         private NC2InGameGuiBase.CBaseToolGfxElement? _priorityFrame; // +0x70
-        private NC2InGameGuiBase.CBaseToolGfxButton? _btnPriority;  // +0x78
+        private CBaseToolGfxButton? _btnPriority;  // +0x78
 
         // Windows
         private NC2InGameGuiMiscWindows.CMissionOnscreenInfoStaticGuiWindow? _missionOnscreenInfoWindow; // +0x10
@@ -150,7 +151,7 @@ namespace OpenVikings.NC2InGameGuiManager
 
         // 0x80 / 0x88
         private NXBaseGui.CBaseWindow? _overviewWindowPtr;
-        private NC2InGameGuiBase.CBaseToolGfxButton? _overviewToggleButton;
+        private CBaseToolGfxButton? _overviewToggleButton;
 
         // 0x1C0
         private int _optionsScrollSpeedIndex;
@@ -498,7 +499,7 @@ namespace OpenVikings.NC2InGameGuiManager
                 }
             }
 
-            NC2InGameGuiBase.CBaseToolGfxButton.SetGraphicsId(_btnSpeed, gfxId);
+            CBaseToolGfxButton.SetGraphicsId(_btnSpeed, gfxId);
 
             if (force || NC2InGameGuiGlobals.SpeedButton_LastSpeedFactor != speedFactor)
             {
@@ -515,7 +516,7 @@ namespace OpenVikings.NC2InGameGuiManager
                     tooltip = string.Format("{0} (*{1})", baseText, speedFactor);
                 }
 
-                NC2InGameGuiBase.CBaseToolGfxButton.SetToolTipString(_btnSpeed, tooltip);
+                CBaseToolGfxButton.SetToolTipString(_btnSpeed, tooltip);
 
                 // Decompile: *(byte*)(button+0x68)=1 (dirty flag)
                 _btnSpeed.ToolTipDirtyFlag = true;
@@ -536,7 +537,7 @@ namespace OpenVikings.NC2InGameGuiManager
                 gfxId = (uint)((priority == 1 ? 1 : 0) | 0x40);
             }
 
-            NC2InGameGuiBase.CBaseToolGfxButton.SetGraphicsId(_btnPriority, gfxId);
+            CBaseToolGfxButton.SetGraphicsId(_btnPriority, gfxId);
 
             if (force || NC2InGameGuiGlobals.PriorityButton_LastPriority != priority)
             {
@@ -552,7 +553,7 @@ namespace OpenVikings.NC2InGameGuiManager
                     text = NC2GuiToolsBase.StringTool.StringTool_GetGameGuiMainStringPtr(0x10);
                 }
 
-                NC2InGameGuiBase.CBaseToolGfxButton.SetToolTipString(_btnPriority, text);
+                CBaseToolGfxButton.SetToolTipString(_btnPriority, text);
                 _btnPriority.ToolTipDirtyFlag = true;
             }
         }
@@ -768,8 +769,8 @@ namespace OpenVikings.NC2InGameGuiManager
             _btnButton0 = CreateToolButton(new SRectangle(0, 0x149, 0x28, 0x23), 0x30, 0, 0xf44, messageHandler);
 
             _btnSpeed = new NC2InGameGuiBase.CBaseToolGfxButton(new SRectangle(0, 0x175, 0x28, 0x23), 0x31, 0xf46, messageHandler);
-            NC2InGameGuiBase.CBaseToolGfxButton.SetCenterGraphicsFlag(_btnSpeed, false);
-            NC2InGameGuiBase.CBaseToolGfxButton.SetPalettePtr(_btnSpeed, NC2InGameGuiGlobals.DAT_1003a44b0);
+            CBaseToolGfxButton.SetCenterGraphicsFlag(_btnSpeed, false);
+            CBaseToolGfxButton.SetPalettePtr(_btnSpeed, NC2InGameGuiGlobals.DAT_1003a44b0);
             NC2InGameGuiBase.BaseToolDesktop_AddBackgroundElement(_btnSpeed);
 
             MiscButtons_SpeedButton_Update(true);
@@ -780,8 +781,8 @@ namespace OpenVikings.NC2InGameGuiManager
             NC2InGameGuiBase.BaseToolDesktop_AddBackgroundElement(_priorityFrame);
 
             _btnPriority = new NC2InGameGuiBase.CBaseToolGfxButton(new SRectangle(0x6a, 3, 0x25, 0x1f), 0x40, 0xf47, messageHandler);
-            NC2InGameGuiBase.CBaseToolGfxButton.SetCenterGraphicsFlag(_btnPriority, false);
-            NC2InGameGuiBase.CBaseToolGfxButton.SetPalettePtr(_btnPriority, NC2InGameGuiGlobals.DAT_1003a44b0);
+            CBaseToolGfxButton.SetCenterGraphicsFlag(_btnPriority, false);
+            CBaseToolGfxButton.SetPalettePtr(_btnPriority, NC2InGameGuiGlobals.DAT_1003a44b0);
             NC2InGameGuiBase.BaseToolDesktop_AddBackgroundElement(_btnPriority);
 
             MiscButtons_MessagePriorityButton_Update(true);
@@ -1188,13 +1189,13 @@ namespace OpenVikings.NC2InGameGuiManager
             return false;
         }
 
-        private static NC2InGameGuiBase.CBaseToolGfxButton CreateToolButton(SRectangle rect, uint gfxId, int stringId, int messageId, NXBaseGui.CBaseElement messageHandler)
+        private static CBaseToolGfxButton CreateToolButton(SRectangle rect, uint gfxId, int stringId, int messageId, NXBaseGui.CBaseElement messageHandler)
         {
             string label = NC2GuiToolsBase.StringTool.StringTool_GetGameGuiMainStringPtr(stringId);
 
-            NC2InGameGuiBase.CBaseToolGfxButton btn = new NC2InGameGuiBase.CBaseToolGfxButton(rect, gfxId, label, messageId, messageHandler);
-            NC2InGameGuiBase.CBaseToolGfxButton.SetCenterGraphicsFlag(btn, false);
-            NC2InGameGuiBase.CBaseToolGfxButton.SetPalettePtr(btn, NC2InGameGuiGlobals.DAT_1003a44b0);
+            CBaseToolGfxButton btn = new NC2InGameGuiBase.CBaseToolGfxButton(rect, gfxId, label, messageId, messageHandler);
+            CBaseToolGfxButton.SetCenterGraphicsFlag(btn, false);
+            CBaseToolGfxButton.SetPalettePtr(btn, NC2InGameGuiGlobals.DAT_1003a44b0);
             NC2InGameGuiBase.BaseToolDesktop_AddBackgroundElement(btn);
             return btn;
         }
@@ -1974,7 +1975,7 @@ namespace OpenVikings.NC2InGameGuiManager
                         buttonRect.Y = buttonRect.Y + cornerBiasY;
                     }
 
-                    NC2InGameGuiBase.CBaseToolGfxButton button = new NC2InGameGuiBase.CBaseToolGfxButton(
+                    CBaseToolGfxButton button = new NC2InGameGuiBase.CBaseToolGfxButton(
                         buttonRect,
                         gfxId,
                         tooltip,
@@ -2427,7 +2428,7 @@ namespace OpenVikings.NC2InGameGuiManager
                             buttonRect = new SRectangle(buttonRect.X + edgeAdjustY, buttonRect.Y + edgeAdjustX, buttonRect.Width, buttonRect.Height);
                         }
 
-                        NC2InGameGuiBase.CBaseToolGfxButton button = new NC2InGameGuiBase.CBaseToolGfxButton(buttonRect, iconId, tooltip, humanCommandType + 3000, _defaultMessageHandler);
+                        CBaseToolGfxButton button = new NC2InGameGuiBase.CBaseToolGfxButton(buttonRect, iconId, tooltip, humanCommandType + 3000, _defaultMessageHandler);
 
                         button.SetCenterGraphicsFlag(true);
 
@@ -3423,7 +3424,7 @@ namespace OpenVikings.NC2InGameGuiManager
                 SRectangle rect = new SRectangle(0, NC2InGameGuiBase.Layout.TopBarY - 0x26, 0x26, 0x26);
                 string tip = NC2GuiToolsBase.StringTool_GetGameGuiMainString(0x0C);
 
-                NC2InGameGuiBase.CBaseToolGfxButton btn = new NC2InGameGuiBase.CBaseToolGfxButton(rect, 0x91, tip, 0x0F45, _defaultMessageHandler);
+                CBaseToolGfxButton btn = new NC2InGameGuiBase.CBaseToolGfxButton(rect, 0x91, tip, 0x0F45, _defaultMessageHandler);
                 _overviewToggleButton = btn;
 
                 btn.SetPalettePtr(NC2InGameGuiBase.Palettes.TopBarPalette);

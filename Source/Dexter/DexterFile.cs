@@ -1,12 +1,15 @@
-﻿using OpenVikings.Dexter.Struct;
+﻿using System.Globalization;
+using System.Text;
+using OpenVikings.Dexter.Struct;
 
 namespace OpenVikings.Dexter
 {
     // Managed port of the shown DexterFile pseudo code.
     // Notes:
-    // - No unsafe/IntPtr: file handles are represented as object references (whatever OSGeneric returns).
+    // - No unsafe/IntPtr: file handles are represented via FileHandle.
     // - The original code uses a fixed-size "FileList" array (1000 entries) and swap-removes on close.
-    // - The original has optional per-file buffering for write/read. This port keeps the same idea with byte[] buffers.
+    // - Optional per-file buffering is kept (byte[]), with BufferOffset acting like the C++ 0x124 field:
+    //   -1 means "no buffered data available".
     internal static class DexterFile
     {
         private static OSGeneric? _osGeneric;
@@ -70,22 +73,25 @@ namespace OpenVikings.Dexter
         {
             EnsureFileListInitialized();
 
-            // Close all open files that are not mode == '\b' (8).
-            // The C++ logic decrements the index after close because close swap-removes the last entry.
-            if (_fileListUsed > 0)
+            if (_fileListUsed <= 0)
             {
-                int i = 0;
-                while (i < _fileListUsed)
-                {
-                    FileEntry entry = _fileList![i];
-                    if (entry.Mode != 8 && entry.Handle.IsValid)
-                    {
-                        FileClose(entry.Handle);
-                        i--; // compensate for swap-remove
-                    }
+                return;
+            }
 
-                    i++;
+            // Close all open files where mode != '\b'.
+            // The original decrements the index after close because close swap-removes.
+            int i = 0;
+            while (i < _fileListUsed)
+            {
+                FileEntry entry = _fileList![i];
+
+                if (entry.Mode != 8 && entry.Handle.IsValid)
+                {
+                    FileClose(entry.Handle);
+                    i--;
                 }
+
+                i++;
             }
         }
 
@@ -109,17 +115,20 @@ namespace OpenVikings.Dexter
 
                 FileEntry entry = _fileList![index];
 
-                // C++: if mode != '\b' then debug + decrement fopen_count and flush buffered writes if mode == 1
+                // If mode != '\b' then debug + decrement fopen_count and flush buffered writes if mode == 1.
                 if (entry.Mode != 8)
                 {
                     DexterDebug.CheckDebugMode(8);
                     _fopenCount--;
 
-                    // Mode == 1 => buffered write file in the original.
-                    if (entry.Mode == 1 && entry.Buffer != null && entry.BufferCount > 0)
+                    if (entry.Mode == 1 && entry.Buffer != null)
                     {
-                        // Write the buffered bytes [0..BufferCount)
-                        OS.SystemFileWrite(entry.Handle!, entry.Buffer, 0, entry.BufferCount);
+                        int buffered = entry.BufferOffset;
+                        if (buffered > 0)
+                        {
+                            OS.SystemFileWrite(entry.Handle, entry.Buffer, 0, buffered);
+                            entry.StreamPos += buffered;
+                        }
 
                         entry.BufferOffset = -1;
                         entry.BufferCount = 0;
@@ -133,17 +142,20 @@ namespace OpenVikings.Dexter
                 entry.BufferOffset = -1;
 
                 // Close underlying file
-                OS.SystemFileClose(entry.Handle!);
+                OS.SystemFileClose(entry.Handle);
 
                 // Swap-remove last into this slot
                 _fileListUsed--;
-                if (_fileListUsed > 0 && index != _fileListUsed)
+                if (index != _fileListUsed && _fileListUsed >= 0)
                 {
                     _fileList[index] = _fileList[_fileListUsed];
                 }
 
                 // Clear last slot
-                _fileList[_fileListUsed] = FileEntry.CreateEmpty();
+                if (_fileListUsed >= 0)
+                {
+                    _fileList[_fileListUsed] = FileEntry.CreateEmpty();
+                }
             }
             finally
             {
@@ -153,43 +165,21 @@ namespace OpenVikings.Dexter
 
         internal static bool FileExists(string path, byte modeFlags)
         {
-            if (path == null)
+            if (string.IsNullOrEmpty(path))
             {
                 return false;
             }
 
-            string newPath = path;
-
-            // If (flags & 0x26) == 0 => ContentPath, else StoragePath
-            if ((modeFlags & 0x26) == 0)
-            {
-                if (!string.IsNullOrEmpty(_contentPath))
-                {
-                    newPath = InsertBasePathIfMissing(newPath, _contentPath);
-                }
-            }
-            else
-            {
-                if (!string.IsNullOrEmpty(_storagePath))
-                {
-                    // In C++: if already begins with StoragePath, do not insert again
-                    if (!StartsWith(newPath, _storagePath))
-                    {
-                        newPath = InsertBasePathIfMissing(newPath, _storagePath);
-                    }
-                }
-            }
-
-            newPath = newPath.Replace("\\", "/");
-            OSGeneric.ModifyPath(newPath);
+            string newPath = BuildPathForMode(path, modeFlags);
 
             FileHandle handle = OS.SystemFileOpen(newPath, 0);
             if (handle.IsValid)
             {
                 OS.SystemFileClose(handle);
+                return true;
             }
 
-            return handle.IsValid;
+            return false;
         }
 
         internal static FileHandle FileOpen(string path, byte modeFlags)
@@ -199,28 +189,7 @@ namespace OpenVikings.Dexter
             {
                 EnsureFileListInitialized();
 
-                string newPath = path ?? string.Empty;
-
-                if ((modeFlags & 0x26) == 0)
-                {
-                    if (!string.IsNullOrEmpty(_contentPath))
-                    {
-                        newPath = InsertBasePathIfMissing(newPath, _contentPath);
-                    }
-                }
-                else
-                {
-                    if (!string.IsNullOrEmpty(_storagePath))
-                    {
-                        if (!StartsWith(newPath, _storagePath))
-                        {
-                            newPath = InsertBasePathIfMissing(newPath, _storagePath);
-                        }
-                    }
-                }
-
-                newPath = newPath.Replace("\\", "/");
-                OSGeneric.ModifyPath(newPath);
+                string newPath = BuildPathForMode(path ?? string.Empty, modeFlags);
 
                 int slot = FindFreeFileSlotNoLock();
                 if (slot < 0)
@@ -240,12 +209,28 @@ namespace OpenVikings.Dexter
                 }
 
                 _fileList[slot].Path = newPath;
-                _fileList[slot].Size = checked((int)OS.SystemFileSize(handle));
+
+                long size64 = OS.SystemFileSize(handle);
+                int size32;
+                if (size64 <= 0)
+                {
+                    size32 = 0;
+                }
+                else if (size64 > int.MaxValue)
+                {
+                    size32 = int.MaxValue;
+                }
+                else
+                {
+                    size32 = (int)size64;
+                }
+
+                _fileList[slot].Size = size32;
                 _fileList[slot].Pos = 0;
                 _fileList[slot].StreamPos = 0;
                 _fileList[slot].Mode = modeFlags;
 
-                // C++: *(plVar4 + 0x24) = 0; then allocate buffer if mode != '\b' and DefaultFileBuffer > 0
+                // Initialize buffering fields (C++ sets BufferOffset to -1 and BufferCount/Size).
                 _fileList[slot].Buffer = null;
                 _fileList[slot].BufferSize = 0;
                 _fileList[slot].BufferCount = 0;
@@ -277,9 +262,26 @@ namespace OpenVikings.Dexter
             _defaultFileBuffer = bytes;
         }
 
+        // Mirrors: DexterFile::FileRead(PHYSFS_File*, void*, int, unsigned char)
         internal static int FileRead(FileHandle file, byte[] buffer, int count, byte flags)
         {
+            return FileRead(file, buffer, 0, count, flags);
+        }
+
+        // Managed helper: FileRead into buffer region starting at offset.
+        internal static int FileRead(FileHandle file, byte[] buffer, int bufferOffset, int count, byte flags)
+        {
             if (buffer == null || count < 1)
+            {
+                return 0;
+            }
+
+            if (bufferOffset < 0 || bufferOffset > buffer.Length)
+            {
+                return 0;
+            }
+
+            if (count < 0 || count > buffer.Length - bufferOffset)
             {
                 return 0;
             }
@@ -303,61 +305,57 @@ namespace OpenVikings.Dexter
                 FileEntry entry = _fileList![index];
 
                 int totalRead = 0;
-                int writeOffset = 0;
+                int writeOffset = bufferOffset;
 
-                // If there is a buffer and BufferOffset >= 0, serve from it first.
-                if (entry.Buffer != null)
+                // Serve from buffered data first (BufferOffset >= 0 means valid).
+                if (entry.Buffer != null && entry.BufferOffset >= 0)
                 {
-                    int bufOffset = entry.BufferOffset;
-                    if (bufOffset >= 0)
+                    int remaining = entry.BufferCount - entry.BufferOffset;
+                    if (remaining > 0)
                     {
-                        int remaining = entry.BufferCount - bufOffset;
-                        if (remaining > 0)
+                        int take = count < remaining ? count : remaining;
+
+                        Buffer.BlockCopy(entry.Buffer, entry.BufferOffset, buffer, writeOffset, take);
+
+                        entry.Pos += take;
+                        entry.BufferOffset += take;
+
+                        totalRead += take;
+                        writeOffset += take;
+                        count -= take;
+
+                        if (count <= 0)
                         {
-                            int take = Math.Min(count, remaining);
-                            Buffer.BlockCopy(entry.Buffer, bufOffset, buffer, 0, take);
-
-                            entry.Pos += take;
-                            entry.BufferOffset += take;
-
-                            totalRead += take;
-                            writeOffset += take;
-                            count -= take;
-
-                            if (count <= 0)
-                            {
-                                _fileList[index] = entry;
-                                return totalRead;
-                            }
-
-                            // If buffer consumed, mark invalid like C++ sets 0x124 to 0xffffffff
-                            if (entry.BufferOffset >= entry.BufferCount)
-                            {
-                                entry.BufferOffset = -1;
-                            }
+                            _fileList[index] = entry;
+                            return totalRead;
                         }
-                        else
+
+                        if (entry.BufferOffset >= entry.BufferCount)
                         {
                             entry.BufferOffset = -1;
                         }
                     }
+                    else
+                    {
+                        entry.BufferOffset = -1;
+                    }
                 }
 
-                // Ensure OS file pointer is aligned with our logical position when needed.
+                // Ensure OS file pointer matches our logical position.
                 if (entry.Pos != entry.StreamPos)
                 {
                     OS.SystemFileSeek(file, entry.Pos);
                     entry.StreamPos = entry.Pos;
+
                     entry.BufferOffset = -1;
                     entry.BufferCount = 0;
                 }
 
-                // Original behavior:
-                // If (count < bufferSize) and ((flags & 1) == 0) => read a chunk into buffer, then copy count bytes.
+                // Buffered read path: if count < BufferSize and ((flags & 1) == 0)
                 if (entry.Buffer != null && entry.BufferSize > 0 && count < entry.BufferSize && (flags & 1) == 0)
                 {
                     int remainingFile = entry.Size - entry.Pos;
-                    int toFill = Math.Min(entry.BufferSize, remainingFile);
+                    int toFill = entry.BufferSize < remainingFile ? entry.BufferSize : remainingFile;
 
                     int filled = 0;
                     if (toFill > 0)
@@ -368,10 +366,11 @@ namespace OpenVikings.Dexter
                     entry.StreamPos += filled;
                     entry.BufferCount = filled;
 
-                    int take = Math.Min(count, filled);
+                    int take = count < filled ? count : filled;
                     if (take > 0)
                     {
                         Buffer.BlockCopy(entry.Buffer, 0, buffer, writeOffset, take);
+
                         entry.Pos += take;
                         entry.BufferOffset = take;
                         totalRead += take;
@@ -387,22 +386,17 @@ namespace OpenVikings.Dexter
 
                 // Direct read path
                 int maxReadable = entry.Size - entry.Pos;
-                int direct = Math.Min(count, maxReadable);
+                int direct = count < maxReadable ? count : maxReadable;
 
                 int got = 0;
                 if (direct > 0)
                 {
-                    byte[] temp = (writeOffset == 0 && direct == buffer.Length) ? buffer : new byte[direct];
-                    got = OS.SystemFileRead(file, temp, 0, direct);
-
-                    if (!ReferenceEquals(temp, buffer))
-                    {
-                        Buffer.BlockCopy(temp, 0, buffer, writeOffset, got);
-                    }
+                    got = OS.SystemFileRead(file, buffer, writeOffset, direct);
                 }
 
                 entry.Pos += got;
                 entry.StreamPos += got;
+
                 entry.BufferOffset = -1;
                 entry.BufferCount = 0;
 
@@ -417,6 +411,7 @@ namespace OpenVikings.Dexter
             }
         }
 
+        // Mirrors: DexterFile::FileSeek(PHYSFS_File*, int, unsigned char)
         internal static void FileSeek(FileHandle file, int offset, byte origin)
         {
             DexterOS.MutexLock();
@@ -447,7 +442,18 @@ namespace OpenVikings.Dexter
                     target = offset + entry.Size;
                 }
 
+                if (target < 0)
+                {
+                    target = 0;
+                }
+                else if (target > entry.Size)
+                {
+                    // The original code allows seeking to EOF; clamp to [0..Size] here.
+                    target = entry.Size;
+                }
+
                 OS.SystemFileSeek(file, target);
+
                 entry.StreamPos = target;
                 entry.Pos = target;
 
@@ -462,7 +468,14 @@ namespace OpenVikings.Dexter
             }
         }
 
+        // Mirrors: DexterFile::FileWrite(PHYSFS_File*, void const*, int)
         internal static int FileWrite(FileHandle file, byte[] data, int count)
+        {
+            return FileWrite(file, data, 0, count);
+        }
+
+        // Managed helper: write buffer region.
+        internal static int FileWrite(FileHandle file, byte[] data, int dataOffset, int count)
         {
             DexterOS.MutexLock();
             try
@@ -470,6 +483,16 @@ namespace OpenVikings.Dexter
                 EnsureFileListInitialized();
 
                 if (data == null || count <= 0 || !file.IsValid)
+                {
+                    return 0;
+                }
+
+                if (dataOffset < 0 || dataOffset > data.Length)
+                {
+                    return 0;
+                }
+
+                if (count < 0 || count > data.Length - dataOffset)
                 {
                     return 0;
                 }
@@ -482,25 +505,25 @@ namespace OpenVikings.Dexter
 
                 FileEntry entry = _fileList![index];
 
-                // Mode must not be 0 or 0x10 in C++ check.
-                // Here: treat Mode == 0 or 0x10 as non-writable.
+                // C++: mode must not be '\0' or '\x10'
                 if (entry.Mode == 0 || entry.Mode == 0x10)
                 {
                     return 0;
                 }
 
-                // Buffered write path: Mode == 1 and buffer exists
-                if (entry.Mode == 1 && entry.Buffer != null)
+                // Buffered write path: mode == 1 and buffer exists
+                if (entry.Mode == 1 && entry.Buffer != null && entry.BufferSize > 0)
                 {
                     int used = entry.BufferOffset;
                     if (used < 0)
                     {
-                        entry.BufferOffset = 0;
                         used = 0;
+                        entry.BufferOffset = 0;
+                        entry.BufferCount = 0;
                     }
 
-                    // If buffer would overflow => flush current buffer first (C++ does this)
-                    if (entry.BufferSize <= used + count)
+                    // If buffer would overflow -> flush buffer first, then direct write the new chunk
+                    if (used + count >= entry.BufferSize)
                     {
                         if (used > 0)
                         {
@@ -510,27 +533,28 @@ namespace OpenVikings.Dexter
                             entry.BufferCount = 0;
                         }
 
-                        // After flush, fall through to direct write
-                        OS.SystemFileWrite(file, data, 0, count);
+                        OS.SystemFileWrite(file, data, dataOffset, count);
                         entry.StreamPos += count;
                     }
                     else
                     {
-                        Buffer.BlockCopy(data, 0, entry.Buffer, used, count);
+                        Buffer.BlockCopy(data, dataOffset, entry.Buffer, used, count);
                         entry.BufferOffset = used + count;
-                        entry.BufferCount = Math.Max(entry.BufferCount, entry.BufferOffset);
+                        if (entry.BufferOffset > entry.BufferCount)
+                        {
+                            entry.BufferCount = entry.BufferOffset;
+                        }
                     }
                 }
                 else
                 {
                     // Direct write
-                    OS.SystemFileWrite(file, data, 0, count);
+                    OS.SystemFileWrite(file, data, dataOffset, count);
                     entry.StreamPos += count;
                 }
 
                 entry.Pos += count;
 
-                // Size tracking: original code asks OS for size at open; here keep it consistent if writing grows file
                 if (entry.Pos > entry.Size)
                 {
                     entry.Size = entry.Pos;
@@ -543,6 +567,18 @@ namespace OpenVikings.Dexter
             {
                 DexterOS.MutexUnLock();
             }
+        }
+
+        // Managed helper: write a single byte (matches earlier usage in CFile)
+        internal static int FileWrite(FileHandle file, ref byte value, int count)
+        {
+            if (count <= 0)
+            {
+                return 0;
+            }
+
+            byte[] tmp = [value];
+            return FileWrite(file, tmp, 0, 1);
         }
 
         internal static int FilePoss(FileHandle file)
@@ -581,6 +617,7 @@ namespace OpenVikings.Dexter
             return _fileList![index].Size;
         }
 
+        // Mirrors the original printf-style FileWriteString(..., char const*, ...)
         internal static bool FileWriteString(FileHandle file, string format, params object[] args)
         {
             if (!file.IsValid || format == null)
@@ -588,41 +625,36 @@ namespace OpenVikings.Dexter
                 return false;
             }
 
-            string text = (args == null || args.Length == 0) ? format : string.Format(format, args);
+            // Original uses a 5000 byte stack buffer.
+            byte[] tmp = new byte[5000];
+            DexterString.StringPrint(tmp, format, args);
 
-            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(text);
+            int len = 0;
+            while (len < tmp.Length && tmp[len] != 0)
+            {
+                len++;
+            }
 
-            int written = FileWrite(file, bytes, bytes.Length);
-            return written == bytes.Length;
+            int written = FileWrite(file, tmp, 0, len);
+            return written == len;
         }
 
+        // Mirrors: DexterFile::MakeDir(char const*, unsigned char)
         internal static void MakeDir(string path, byte modeFlags)
         {
             DexterDebug.CheckDebugMode(0x20);
 
-            string newPath = path ?? string.Empty;
-
-            if ((modeFlags & 0x26) == 0)
+            if (string.IsNullOrEmpty(path))
             {
-                if (!string.IsNullOrEmpty(_contentPath))
-                {
-                    newPath = InsertBasePathIfMissing(newPath, _contentPath);
-                }
-            }
-            else
-            {
-                if (!string.IsNullOrEmpty(_storagePath))
-                {
-                    if (!StartsWith(newPath, _storagePath))
-                    {
-                        newPath = InsertBasePathIfMissing(newPath, _storagePath);
-                    }
-                }
+                return;
             }
 
-            _ = newPath.Replace("\\", "/");
+            string newPath = BuildPathForMode(path, modeFlags);
+
+            OS.MakeDir(newPath);
         }
 
+        // Mirrors: DexterFile::FileDelete(char*)
         internal static bool FileDelete(string path)
         {
             if (!FileExists(path, 0))
@@ -630,19 +662,25 @@ namespace OpenVikings.Dexter
                 return false;
             }
 
-            string newPath = path ?? string.Empty;
+            if (string.IsNullOrEmpty(path))
+            {
+                return false;
+            }
+
+            string newPath = path;
 
             if (!string.IsNullOrEmpty(_storagePath))
             {
                 if (!StartsWith(newPath, _storagePath))
                 {
-                    newPath = InsertBasePathIfMissing(newPath, _storagePath);
+                    newPath = _storagePath + newPath;
                 }
             }
 
             newPath = newPath.Replace("\\", "/");
+            OS.ModifyPath(newPath);
 
-            return OSGeneric.SystemFileDelete(newPath);
+            return OS.SystemFileDelete(newPath);
         }
 
         internal static void SetStoragePath(string path)
@@ -652,8 +690,7 @@ namespace OpenVikings.Dexter
                 return;
             }
 
-            int len = DexterString.StringLength(path);
-            if (len < 0x100)
+            if (path.Length < 0x100)
             {
                 _storagePath = path;
             }
@@ -661,7 +698,6 @@ namespace OpenVikings.Dexter
 
         internal static void XMLInit()
         {
-            // C++ counts down and frees; in managed code just clear.
             for (int i = 0; i < _xmlEntries; i++)
             {
                 _xmlKeys[i] = null;
@@ -684,8 +720,7 @@ namespace OpenVikings.Dexter
             // Update existing
             for (int i = 0; i < _xmlEntries; i++)
             {
-                if (_xmlUsed[i] &&
-                    DexterString.StringCompare(_xmlKeys[i] ?? string.Empty, key, caseSensitive: false))
+                if (_xmlUsed[i] && DexterString.StringCompare(_xmlKeys[i] ?? string.Empty, key, caseSensitive: false))
                 {
                     _xmlKeys[i] = key;
                     _xmlValues[i] = safeValue;
@@ -710,7 +745,7 @@ namespace OpenVikings.Dexter
 
         internal static void XMLSetValue(string key, int value)
         {
-            string s = DexterString.IntegerToString(value);
+            string s = value.ToString(CultureInfo.InvariantCulture);
             XMLSetString(key, s);
         }
 
@@ -722,13 +757,21 @@ namespace OpenVikings.Dexter
                 return 0;
             }
 
-            return DexterString.StringToInteger(s);
+            if (int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed))
+            {
+                return parsed;
+            }
+
+            return 0;
         }
 
         internal static bool XMLLoad(string path, byte modeFlags)
         {
             FileHandle file = FileOpen(path, modeFlags);
-            if (!file.IsValid) return false;
+            if (!file.IsValid)
+            {
+                return false;
+            }
 
             try
             {
@@ -738,11 +781,12 @@ namespace OpenVikings.Dexter
                 bool readingValue = false;
 
                 string currentKey = string.Empty;
-                System.Text.StringBuilder keyBuilder = new();
-                System.Text.StringBuilder valueBuilder = new();
+
+                StringBuilder keyBuilder = new();
+                StringBuilder valueBuilder = new();
 
                 int read;
-                while ((read = FileRead(file, chunk, chunk.Length, 1)) > 0)
+                while ((read = FileRead(file, chunk, 0, chunk.Length, 1)) > 0)
                 {
                     for (int i = 0; i < read; i++)
                     {
@@ -808,7 +852,10 @@ namespace OpenVikings.Dexter
         internal static bool XMLSave(string path, byte modeFlags)
         {
             FileHandle file = FileOpen(path, modeFlags);
-            if (!file.IsValid) return false;
+            if (!file.IsValid)
+            {
+                return false;
+            }
 
             try
             {
@@ -821,7 +868,9 @@ namespace OpenVikings.Dexter
                     {
                         string key = _xmlKeys[i] ?? string.Empty;
                         string val = _xmlValues[i] ?? string.Empty;
-                        FileWriteString(file, "\t<{0}>{1}</{0}>\n", key, val);
+
+                        // Original: "\t<%s>%s</%s>\n"
+                        FileWriteString(file, "\t<%s>%s</%s>\n", key, val, key);
                     }
                 }
 
@@ -870,26 +919,17 @@ namespace OpenVikings.Dexter
                     return;
                 }
 
-                DexterOS.MutexLock();
-                try
+                _fileList = new FileEntry[MaxOpenFiles];
+                for (int i = 0; i < _fileList.Length; i++)
                 {
-                    _fileList = new FileEntry[MaxOpenFiles];
-                    for (int i = 0; i < _fileList.Length; i++)
-                    {
-                        _fileList[i] = FileEntry.CreateEmpty();
-                    }
+                    _fileList[i] = FileEntry.CreateEmpty();
+                }
 
-                    _fileListSize = MaxOpenFiles;
-                    _fileListUsed = 0;
-                }
-                finally
-                {
-                    DexterOS.MutexUnLock();
-                }
+                _fileListSize = MaxOpenFiles;
+                _fileListUsed = 0;
             }
         }
 
-        // C++ FindFreeFile() returns pointer to next slot; here return index.
         // Must be called while DexterOS mutex is held (matches C++ usage from FileOpen()).
         private static int FindFreeFileSlotNoLock()
         {
@@ -905,7 +945,6 @@ namespace OpenVikings.Dexter
             return index;
         }
 
-        // Roll back a slot if open failed (managed convenience).
         private static void RemoveSlotNoLock(int index)
         {
             if (_fileListUsed <= 0)
@@ -957,6 +996,36 @@ namespace OpenVikings.Dexter
             }
 
             return null;
+        }
+
+        private static string BuildPathForMode(string path, byte modeFlags)
+        {
+            string newPath = path;
+
+            // If (flags & 0x26) == 0 => ContentPath, else StoragePath.
+            if ((modeFlags & 0x26) == 0)
+            {
+                if (!string.IsNullOrEmpty(_contentPath))
+                {
+                    newPath = InsertBasePathIfMissing(newPath, _contentPath);
+                }
+            }
+            else
+            {
+                if (!string.IsNullOrEmpty(_storagePath))
+                {
+                    // In C++: if already begins with StoragePath, do not insert again.
+                    if (!StartsWith(newPath, _storagePath))
+                    {
+                        newPath = InsertBasePathIfMissing(newPath, _storagePath);
+                    }
+                }
+            }
+
+            newPath = newPath.Replace("\\", "/");
+            OS.ModifyPath(newPath);
+
+            return newPath;
         }
 
         private static string InsertBasePathIfMissing(string path, string basePath)

@@ -151,7 +151,7 @@ namespace OpenVikings.NXBasics
                 return 0;
             }
 
-            SRectangle? rect = _bobManager.GetBobAreaRectanglePtr(bobId);
+            SRectangle? rect = _bobManager.GetBobAreaRectangle(bobId);
             if (rect == null)
             {
                 return 0;
@@ -175,7 +175,7 @@ namespace OpenVikings.NXBasics
                 return 0;
             }
 
-            SRectangle? rect = _bobManager.GetBobAreaRectanglePtr(bobId);
+            SRectangle? rect = _bobManager.GetBobAreaRectangle(bobId);
             if (rect == null)
             {
                 return 0;
@@ -225,7 +225,7 @@ namespace OpenVikings.NXBasics
 
                 if (bobId != 0xFFFFFFFFu)
                 {
-                    SRectangle? rect = _bobManager.GetBobAreaRectanglePtr(bobId);
+                    SRectangle? rect = _bobManager.GetBobAreaRectangle(bobId);
                     if (rect != null)
                     {
                         w = _spacing + rect.Value.X + rect.Value.Width + 1;
@@ -268,7 +268,7 @@ namespace OpenVikings.NXBasics
                 }
 
                 uint bobId = unchecked((uint)idx);
-                SRectangle? rect = _bobManager.GetBobAreaRectanglePtr(bobId);
+                SRectangle? rect = _bobManager.GetBobAreaRectangle(bobId);
                 if (rect == null)
                 {
                     continue;

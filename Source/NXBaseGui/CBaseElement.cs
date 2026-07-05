@@ -361,8 +361,7 @@ internal class CBaseElement
     // NXBaseGui::CBaseElement::XGui_BE_Element_FindElementOnPosition(NXBasics::SPoint const&, bool)
     internal virtual CBaseElement? XGui_BE_Element_FindElementOnPosition(in SPoint point, bool forcePick)
     {
-        if ((((uint)_flags & (uint)BaseElementFlags.CanBeActivatedMask) == 1 || forcePick) &&
-            (((uint)_flags & (uint)BaseElementFlags.Hidden) == 0))
+        if ((((uint)_flags & (uint)BaseElementFlags.CanBeActivatedMask) == 1 || forcePick) && (((uint)_flags & (uint)BaseElementFlags.Hidden) == 0))
         {
             if (XGui_BE_Element_HitTest(in point))
             {
@@ -414,10 +413,7 @@ internal class CBaseElement
         int left = _rect.X;
         int top = _rect.Y;
 
-        return point.X >= left &&
-               point.X < left + _rect.Width &&
-               point.Y >= top &&
-               point.Y < top + _rect.Height;
+        return point.X >= left && point.X < left + _rect.Width && point.Y >= top && point.Y < top + _rect.Height;
     }
 
     private static uint ComputeCtorFlags(uint flags)

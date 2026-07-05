@@ -383,7 +383,7 @@ internal class CBaseWindow : CBaseElement
 
     // Everything below is intentionally thin; implement/adjust in the real codebase where the fields exist.
 
-    internal BaseElementState State
+    internal new BaseElementState State
     {
         get { return _state; }
     }

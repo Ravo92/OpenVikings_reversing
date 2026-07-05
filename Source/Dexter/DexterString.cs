@@ -5,24 +5,22 @@ namespace OpenVikings.Dexter
 {
     // Managed port of DexterString helpers (ASCII / C-string style).
     // Notes:
-    // - These functions treat buffers as null-terminated ('\0') character arrays.
-    // - Character classification is ASCII-focused, matching the original intent.
+    // - Buffers are treated as null-terminated (0) byte arrays (C "char*" semantics).
+    // - Case operations are ASCII-only.
     internal static class DexterString
     {
         // --------------------------------------------------------------------
-        // Char classification (ASCII)
+        // Char/byte classification (ASCII)
         // --------------------------------------------------------------------
 
-        internal static ulong IsAlpha(char c)
+        internal static ulong IsAlpha(byte c)
         {
             if (c >= 0x7F)
             {
                 return 0;
             }
 
-            // The original uses a CharacterTypes lookup with mask 0x103.
-            // For a practical C# port, treat ASCII letters and '_' as alpha-like.
-            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_')
+            if ((c >= (byte)'A' && c <= (byte)'Z') || (c >= (byte)'a' && c <= (byte)'z') || c == (byte)'_')
             {
                 return 1;
             }
@@ -30,14 +28,14 @@ namespace OpenVikings.Dexter
             return 0;
         }
 
-        internal static ulong IsDigit(char c)
+        internal static ulong IsDigit(byte c)
         {
             if (c > 0x7E)
             {
                 return 0;
             }
 
-            if (c < '0' || c > '9')
+            if (c < (byte)'0' || c > (byte)'9')
             {
                 return 0;
             }
@@ -45,7 +43,7 @@ namespace OpenVikings.Dexter
             return 1;
         }
 
-        internal static bool IsAlphaNum(char c)
+        internal static bool IsAlphaNum(byte c)
         {
             if (c >= 0x7F)
             {
@@ -57,39 +55,30 @@ namespace OpenVikings.Dexter
                 return true;
             }
 
-            if (c >= '0' && c <= '9')
-            {
-                return true;
-            }
-
-            return false;
+            return c >= (byte)'0' && c <= (byte)'9';
         }
 
-        internal static char ToLower(char c)
+        internal static byte ToLower(byte c)
         {
-            // Original:
-            // cLower = c + ' ';
-            // if (0x19 < (byte)(c + 0xbfU)) cLower = c;
-            // This is a compact ASCII A..Z check.
-            if (c >= 'A' && c <= 'Z')
+            if (c >= (byte)'A' && c <= (byte)'Z')
             {
-                return (char)(c + 0x20);
+                return (byte)(c + 0x20);
             }
 
             return c;
         }
 
         // --------------------------------------------------------------------
-        // C-string style buffer operations (null-terminated Span<char>)
+        // C-string style buffer operations (null-terminated byte buffers)
         // --------------------------------------------------------------------
 
-        internal static void StringToLower(Span<char> buffer)
+        internal static void StringToLower(Span<byte> buffer)
         {
             int i = 0;
             while (i < buffer.Length)
             {
-                char c = buffer[i];
-                if (c == '\0')
+                byte c = buffer[i];
+                if (c == 0)
                 {
                     break;
                 }
@@ -100,13 +89,48 @@ namespace OpenVikings.Dexter
         }
 
         /// <summary>
-        /// Searches for <paramref name="needle"/> in <paramref name="haystack"/>.
+        /// Returns the C-string length (up to the first 0 byte) within the span.
+        /// </summary>
+        internal static int StringLength(ReadOnlySpan<byte> cstr)
+        {
+            return CStrLen(cstr);
+        }
+
+        /// <summary>
+        /// Converts a null-terminated byte buffer to a managed string (ASCII-ish).
+        /// Bytes outside 0..127 are mapped to '?'.
+        /// </summary>
+        internal static string StringToString(ReadOnlySpan<byte> cstr)
+        {
+            int len = CStrLen(cstr);
+            if (len == 0)
+            {
+                return string.Empty;
+            }
+
+            char[] chars = new char[len];
+            for (int i = 0; i < len; i++)
+            {
+                byte b = cstr[i];
+                chars[i] = b <= 0x7F ? (char)b : '?';
+            }
+
+            return new string(chars);
+        }
+
+        /// <summary>
+        /// Searches for <paramref name="needleAscii"/> in <paramref name="haystack"/>.
         /// If <paramref name="caseSensitive"/> is true: exact match. If false: ASCII case-insensitive.
         /// Returns the start index, or -1 if not found.
         /// </summary>
-        internal static int StringSearch(ReadOnlySpan<char> haystack, ReadOnlySpan<char> needle, bool caseSensitive)
+        internal static int StringSearch(ReadOnlySpan<byte> haystack, string needleAscii, bool caseSensitive)
         {
-            int needleLen = CStrLen(needle);
+            if (needleAscii == null)
+            {
+                return -1;
+            }
+
+            int needleLen = needleAscii.Length;
             if (needleLen == 0)
             {
                 return 0;
@@ -126,10 +150,13 @@ namespace OpenVikings.Dexter
                 }
 
                 bool match = true;
+
                 for (int j = 0; j < needleLen; j++)
                 {
-                    char a = haystack[start + j];
-                    char b = needle[j];
+                    byte a = haystack[start + j];
+                    char bch = needleAscii[j];
+
+                    byte b = bch <= 0x7F ? (byte)bch : (byte)'?';
 
                     if (caseSensitive)
                     {
@@ -159,29 +186,199 @@ namespace OpenVikings.Dexter
         }
 
         /// <summary>
-        /// Replaces all occurrences of <paramref name="find"/> with <paramref name="replace"/> in-place.
-        /// Output is truncated to fit the destination buffer (always null-terminated if possible).
+        /// strcpy-like: copies src into dst including terminator; truncates safely and always null-terminates if possible.
         /// </summary>
-        internal static void StringReplace(Span<char> buffer, ReadOnlySpan<char> find, ReadOnlySpan<char> replace)
+        internal static void StringCopy(Span<byte> dst, ReadOnlySpan<byte> src)
+        {
+            if (dst.Length == 0)
+            {
+                return;
+            }
+
+            int i = 0;
+
+            while (i < dst.Length)
+            {
+                byte c = i < src.Length ? src[i] : (byte)0;
+                dst[i] = c;
+                i++;
+
+                if (c == 0)
+                {
+                    return;
+                }
+            }
+
+            dst[^1] = 0;
+        }
+
+        /// <summary>
+        /// Copies a managed string (ASCII-ish) into dst including terminator; truncates safely.
+        /// Characters outside 0..127 are mapped to '?'.
+        /// </summary>
+        internal static void StringCopy(Span<byte> dst, string src)
+        {
+            if (dst.Length == 0)
+            {
+                return;
+            }
+
+            if (src == null)
+            {
+                dst[0] = 0;
+                return;
+            }
+
+            int maxWritable = dst.Length - 1;
+            int count = src.Length < maxWritable ? src.Length : maxWritable;
+
+            for (int i = 0; i < count; i++)
+            {
+                char ch = src[i];
+                dst[i] = ch <= 0x7F ? (byte)ch : (byte)'?';
+            }
+
+            dst[count] = 0;
+        }
+
+        /// <summary>
+        /// strncpy-like: copies up to maxCount bytes; if src ends early, zero-fills to maxCount.
+        /// Always attempts to null-terminate if there is space.
+        /// </summary>
+        internal static void StringCopy(Span<byte> dst, string src, int maxCount)
+        {
+            if (maxCount <= 0 || dst.Length == 0)
+            {
+                return;
+            }
+
+            int limit = dst.Length < maxCount ? dst.Length : maxCount;
+
+            int i = 0;
+            int srcLen = src != null ? src.Length : 0;
+
+            for (; i < limit; i++)
+            {
+                if (src == null || i >= srcLen)
+                {
+                    dst[i] = 0;
+                    i++;
+                    break;
+                }
+
+                char ch = src[i];
+                dst[i] = ch <= 0x7F ? (byte)ch : (byte)'?';
+
+                if (dst[i] == 0)
+                {
+                    i++;
+                    break;
+                }
+            }
+
+            for (; i < limit; i++)
+            {
+                dst[i] = 0;
+            }
+
+            if (dst.Length > 0 && dst[^1] != 0)
+            {
+                dst[^1] = 0;
+            }
+        }
+
+        /// <summary>
+        /// Appends src to dst (null-terminated). Truncates safely and ensures termination.
+        /// </summary>
+        internal static void StringAttach(Span<byte> dst, ReadOnlySpan<byte> src)
+        {
+            if (dst.Length == 0)
+            {
+                return;
+            }
+
+            int dstLen = CStrLen(dst);
+            int w = dstLen;
+
+            int i = 0;
+            while (w < dst.Length)
+            {
+                byte c = i < src.Length ? src[i] : (byte)0;
+                dst[w] = c;
+
+                if (c == 0)
+                {
+                    return;
+                }
+
+                w++;
+                i++;
+
+                if (w >= dst.Length - 1)
+                {
+                    dst[^1] = 0;
+                    return;
+                }
+            }
+
+            dst[^1] = 0;
+        }
+
+        /// <summary>
+        /// Appends a managed string (ASCII-ish) to dst (null-terminated). Truncates safely and ensures termination.
+        /// </summary>
+        internal static void StringAttach(Span<byte> dst, string src)
+        {
+            if (dst.Length == 0)
+            {
+                return;
+            }
+
+            if (src == null)
+            {
+                return;
+            }
+
+            int dstLen = CStrLen(dst);
+            int maxWritable = dst.Length - 1;
+
+            int w = dstLen;
+            int i = 0;
+
+            while (w < maxWritable && i < src.Length)
+            {
+                char ch = src[i];
+                dst[w] = ch <= 0x7F ? (byte)ch : (byte)'?';
+                w++;
+                i++;
+            }
+
+            dst[w] = 0;
+        }
+
+        /// <summary>
+        /// Replaces all occurrences of find with replace in-place. Output is truncated and null-terminated.
+        /// </summary>
+        internal static void StringReplace(Span<byte> buffer, string findAscii, string replaceAscii)
         {
             if (buffer.Length == 0)
             {
                 return;
             }
 
-            int findLen = CStrLen(find);
-            if (findLen == 0)
+            if (string.IsNullOrEmpty(findAscii))
             {
                 return;
             }
 
             int srcLen = CStrLen(buffer);
 
-            // Build into a temporary array of the same capacity (like the original stack temp).
-            char[] tmp = new char[buffer.Length];
+            byte[] tmp = new byte[buffer.Length];
             int w = 0;
 
+            int findLen = findAscii.Length;
             int i = 0;
+
             while (i < srcLen)
             {
                 bool isMatch = false;
@@ -189,9 +386,14 @@ namespace OpenVikings.Dexter
                 if (i + findLen <= srcLen)
                 {
                     isMatch = true;
+
                     for (int j = 0; j < findLen; j++)
                     {
-                        if (buffer[i + j] != find[j])
+                        byte a = buffer[i + j];
+                        char bch = findAscii[j];
+                        byte b = bch <= 0x7F ? (byte)bch : (byte)'?';
+
+                        if (a != b)
                         {
                             isMatch = false;
                             break;
@@ -201,7 +403,8 @@ namespace OpenVikings.Dexter
 
                 if (isMatch)
                 {
-                    int repLen = CStrLen(replace);
+                    int repLen = replaceAscii != null ? replaceAscii.Length : 0;
+
                     for (int k = 0; k < repLen; k++)
                     {
                         if (w >= tmp.Length - 1)
@@ -209,7 +412,8 @@ namespace OpenVikings.Dexter
                             break;
                         }
 
-                        tmp[w++] = replace[k];
+                        char ch = replaceAscii[k];
+                        tmp[w++] = ch <= 0x7F ? (byte)ch : (byte)'?';
                     }
 
                     i += findLen;
@@ -225,94 +429,26 @@ namespace OpenVikings.Dexter
                 i++;
             }
 
-            // Null-terminate.
-            tmp[w] = '\0';
+            tmp[w] = 0;
 
-            // Copy back.
-            int cpy = Math.Min(buffer.Length, tmp.Length);
+            int cpy = buffer.Length < tmp.Length ? buffer.Length : tmp.Length;
             for (int t = 0; t < cpy; t++)
             {
                 buffer[t] = tmp[t];
-                if (tmp[t] == '\0')
+                if (tmp[t] == 0)
                 {
                     break;
                 }
             }
 
-            // Ensure terminator even if we broke without copying '\0'.
-            if (buffer.Length > 0 && buffer[^1] != '\0')
+            if (buffer.Length > 0 && buffer[^1] != 0)
             {
-                buffer[^1] = '\0';
-            }
-        }
-
-        internal static int StringLength(ReadOnlySpan<char> cstr)
-        {
-            return CStrLen(cstr);
-        }
-
-        internal static void StringCopy(Span<char> dst, ReadOnlySpan<char> src)
-        {
-            int i = 0;
-            while (i < dst.Length)
-            {
-                char c = (i < src.Length) ? src[i] : '\0';
-                dst[i] = c;
-                i++;
-
-                if (c == '\0')
-                {
-                    break;
-                }
-            }
-
-            if (dst.Length > 0 && dst[^1] != '\0')
-            {
-                dst[^1] = '\0';
+                buffer[^1] = 0;
             }
         }
 
         /// <summary>
-        /// C strncpy behavior: copies up to maxCount characters; zero-fills remainder if src ends early.
-        /// Always attempts to null-terminate if there is space.
-        /// </summary>
-        internal static void StringCopy(Span<char> dst, ReadOnlySpan<char> src, int maxCount)
-        {
-            if (maxCount <= 0 || dst.Length == 0)
-            {
-                return;
-            }
-
-            int limit = Math.Min(dst.Length, maxCount);
-
-            int i = 0;
-            for (; i < limit; i++)
-            {
-                char c = (i < src.Length) ? src[i] : '\0';
-                dst[i] = c;
-
-                if (c == '\0')
-                {
-                    i++;
-                    break;
-                }
-            }
-
-            // Zero-fill the rest up to limit.
-            for (; i < limit; i++)
-            {
-                dst[i] = '\0';
-            }
-
-            // If we filled without writing '\0' and we still have capacity, enforce termination.
-            if (dst.Length > 0 && dst[^1] != '\0')
-            {
-                dst[^1] = '\0';
-            }
-        }
-
-        /// <summary>
-        /// Returns 1 if equal, else 0. If caseSensitive is false, compares ASCII case-insensitively.
+        /// Compares two managed strings (ordinal / ordinal-ignore-case).
         /// </summary>
         internal static bool StringCompare(string a, string b, bool caseSensitive)
         {
@@ -320,16 +456,15 @@ namespace OpenVikings.Dexter
         }
 
         /// <summary>
-        /// Strips leading and trailing spaces and tabs (in-place), repeating until stable (like the original loop).
+        /// Strips leading/trailing spaces and tabs (like the original).
         /// </summary>
-        internal static string StringStripWhitespace(string? text)
+        internal static string StringStripWhitespace(string text)
         {
             if (string.IsNullOrEmpty(text))
             {
                 return string.Empty;
             }
 
-            // Original entfernt nur ' ' und '\t' (nicht alle Unicode-Whitespaces).
             int start = 0;
             int end = text.Length - 1;
 
@@ -343,99 +478,17 @@ namespace OpenVikings.Dexter
                 end--;
             }
 
-            if (start == 0 && end == text.Length - 1)
-            {
-                return text;
-            }
-
             if (end < start)
             {
                 return string.Empty;
             }
 
+            if (start == 0 && end == text.Length - 1)
+            {
+                return text;
+            }
+
             return text.Substring(start, end - start + 1);
-        }
-
-        /// <summary>
-        /// Appends src to dst (null-terminated). Returns dst for parity with C.
-        /// </summary>
-        internal static Span<char> StringAttach(Span<char> dst, ReadOnlySpan<char> src)
-        {
-            int dstLen = CStrLen(dst);
-            int w = dstLen;
-
-            int i = 0;
-            while (w < dst.Length)
-            {
-                char c = (i < src.Length) ? src[i] : '\0';
-                dst[w] = c;
-
-                if (c == '\0')
-                {
-                    break;
-                }
-
-                w++;
-                i++;
-                if (w >= dst.Length - 1)
-                {
-                    dst[^1] = '\0';
-                    break;
-                }
-            }
-
-            if (dst.Length > 0 && dst[^1] != '\0')
-            {
-                dst[^1] = '\0';
-            }
-
-            return dst;
-        }
-
-        /// <summary>
-        /// Inserts prefix at the start of buffer (shifts existing content right).
-        /// If capacity is insufficient, the result is truncated.
-        /// </summary>
-        internal static void StringInsert(Span<char> buffer, ReadOnlySpan<char> prefix)
-        {
-            int prefixLen = CStrLen(prefix);
-            if (prefixLen <= 0)
-            {
-                return;
-            }
-
-            int srcLen = CStrLen(buffer);
-            if (srcLen <= 0)
-            {
-                return;
-            }
-
-            // Total desired length without counting terminator.
-            int total = prefixLen + srcLen;
-            int maxWritable = Math.Max(0, buffer.Length - 1);
-            int finalLen = Math.Min(total, maxWritable);
-
-            // Shift right in-place from end, like memmove.
-            // We need to move up to min(srcLen, finalLen - prefixLen) characters of original.
-            int movedSrcLen = Math.Min(srcLen, Math.Max(0, finalLen - prefixLen));
-
-            for (int i = movedSrcLen - 1; i >= 0; i--)
-            {
-                buffer[prefixLen + i] = buffer[i];
-            }
-
-            // Copy prefix into beginning.
-            int copyPrefix = Math.Min(prefixLen, finalLen);
-            for (int i = 0; i < copyPrefix; i++)
-            {
-                buffer[i] = prefix[i];
-            }
-
-            // Null-terminate.
-            if (buffer.Length > 0)
-            {
-                buffer[finalLen] = '\0';
-            }
         }
 
         /// <summary>
@@ -443,7 +496,7 @@ namespace OpenVikings.Dexter
         /// %d %i %u %x %X %s %c and %%.
         /// Output is truncated to fit and null-terminated.
         /// </summary>
-        internal static void StringPrint(Span<char> buffer, string format, params object[] args)
+        internal static void StringPrint(Span<byte> buffer, string format, params object[] args)
         {
             if (buffer.Length == 0)
             {
@@ -453,30 +506,30 @@ namespace OpenVikings.Dexter
             string rendered = PrintfMini(format, args);
 
             int max = buffer.Length - 1;
-            int count = Math.Min(max, rendered.Length);
+            int count = rendered.Length < max ? rendered.Length : max;
 
             for (int i = 0; i < count; i++)
             {
-                buffer[i] = rendered[i];
+                char ch = rendered[i];
+                buffer[i] = ch <= 0x7F ? (byte)ch : (byte)'?';
             }
 
-            buffer[count] = '\0';
+            buffer[count] = 0;
         }
 
-        internal static int StringToInteger(ReadOnlySpan<char> cstr)
+        internal static int StringToInteger(ReadOnlySpan<byte> cstr)
         {
             int i = 0;
 
-            // Skip spaces and tabs.
             while (i < cstr.Length)
             {
-                char c = cstr[i];
-                if (c == '\0')
+                byte c = cstr[i];
+                if (c == 0)
                 {
                     return 0;
                 }
 
-                if (c != ' ' && c != '\t')
+                if (c != (byte)' ' && c != (byte)'\t')
                 {
                     break;
                 }
@@ -488,12 +541,12 @@ namespace OpenVikings.Dexter
 
             if (i < cstr.Length)
             {
-                char sign = cstr[i];
-                if (sign == '+')
+                byte sign = cstr[i];
+                if (sign == (byte)'+')
                 {
                     i++;
                 }
-                else if (sign == '-')
+                else if (sign == (byte)'-')
                 {
                     negative = true;
                     i++;
@@ -501,20 +554,21 @@ namespace OpenVikings.Dexter
             }
 
             int value = 0;
+
             while (i < cstr.Length)
             {
-                char c = cstr[i];
-                if (c == '\0')
+                byte c = cstr[i];
+                if (c == 0)
                 {
                     break;
                 }
 
-                if (c < '0' || c > '9')
+                if (c < (byte)'0' || c > (byte)'9')
                 {
                     break;
                 }
 
-                value = (value * 10) + (c - '0');
+                value = (value * 10) + (c - (byte)'0');
                 i++;
             }
 
@@ -530,54 +584,15 @@ namespace OpenVikings.Dexter
         // Helpers
         // --------------------------------------------------------------------
 
-        private static int CStrLen(ReadOnlySpan<char> s)
+        private static int CStrLen(ReadOnlySpan<byte> s)
         {
             int i = 0;
-            while (i < s.Length && s[i] != '\0')
+            while (i < s.Length && s[i] != 0)
             {
                 i++;
             }
 
             return i;
-        }
-
-        private static void ShiftLeft(Span<char> buffer, int count)
-        {
-            if (count <= 0)
-            {
-                return;
-            }
-
-            int len = CStrLen(buffer);
-            int remaining = Math.Max(0, len - count);
-
-            for (int i = 0; i < remaining; i++)
-            {
-                buffer[i] = buffer[i + count];
-            }
-
-            // Null-terminate and clear the rest (optional, but keeps it tidy).
-            int t = remaining;
-            if (t < buffer.Length)
-            {
-                buffer[t] = '\0';
-                t++;
-            }
-
-            for (; t < buffer.Length; t++)
-            {
-                buffer[t] = '\0';
-            }
-        }
-
-        private static void TrimRightChar(Span<char> buffer, char ch)
-        {
-            int len = CStrLen(buffer);
-            while (len > 0 && buffer[len - 1] == ch)
-            {
-                buffer[len - 1] = '\0';
-                len--;
-            }
         }
 
         private static string PrintfMini(string format, object[] args)
@@ -632,7 +647,7 @@ namespace OpenVikings.Dexter
                         break;
 
                     case 's':
-                        sb.Append(arg?.ToString() ?? string.Empty);
+                        sb.Append(arg != null ? arg.ToString() : string.Empty);
                         break;
 
                     case 'c':
@@ -640,7 +655,6 @@ namespace OpenVikings.Dexter
                         break;
 
                     default:
-                        // Unknown specifier: keep it readable.
                         sb.Append('%').Append(spec);
                         break;
                 }
@@ -659,7 +673,11 @@ namespace OpenVikings.Dexter
             if (value is uint vu32) return vu32;
             if (value is ushort vu16) return vu16;
             if (value is byte vu8) return vu8;
-            if (value is string s && long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out long parsed)) return parsed;
+
+            if (value is string s && long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out long parsed))
+            {
+                return parsed;
+            }
 
             return Convert.ToInt64(value, CultureInfo.InvariantCulture);
         }
@@ -674,7 +692,11 @@ namespace OpenVikings.Dexter
             if (value is int vs32) return unchecked((ulong)vs32);
             if (value is short vs16) return unchecked((ulong)vs16);
             if (value is sbyte vs8) return unchecked((ulong)vs8);
-            if (value is string s && ulong.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong parsed)) return parsed;
+
+            if (value is string s && ulong.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong parsed))
+            {
+                return parsed;
+            }
 
             return Convert.ToUInt64(value, CultureInfo.InvariantCulture);
         }

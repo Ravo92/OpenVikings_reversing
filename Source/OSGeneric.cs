@@ -170,13 +170,13 @@ namespace OpenVikings
         }
 
         // OSGeneric::MakeDir(char const*)
-        internal static ulong MakeDir(string path)
+        internal ulong MakeDir(string path)
         {
             return 0;
         }
 
         // OSGeneric::ChangeDir(char const*)
-        internal static ulong ChangeDir(string path)
+        internal ulong ChangeDir(string path)
         {
             return 0;
         }
@@ -257,12 +257,12 @@ namespace OpenVikings
         }
 
         // OSGeneric::ModifyPath(char*)
-        internal static void ModifyPath(string path)
+        internal void ModifyPath(string path)
         {
         }
 
         // OSGeneric::SystemFileDelete(char*)
-        internal static bool SystemFileDelete(string path)
+        internal bool SystemFileDelete(string path)
         {
             return false;
         }

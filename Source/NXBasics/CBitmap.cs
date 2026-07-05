@@ -60,6 +60,9 @@ namespace OpenVikings.NXBasics
         internal int Width { get { return _rect.Width; } }
         internal int Height { get { return _rect.Height; } }
         internal int StridePixels { get { return _pitchPixels; } }
+        internal int VirtualSrcX { get { return _virtualSrcX; } }
+        internal int VirtualSrcY { get { return _virtualSrcY; } }
+        internal CBitmap? VirtualParent { get { return _virtualParent; } }
 
         private object? _palettePtr;
 

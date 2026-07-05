@@ -171,7 +171,7 @@ namespace OpenVikings.NXBasics
             return _bobData[index].Type;
         }
 
-        internal SRectangle? GetBobAreaRectanglePtr(uint bobId)
+        internal SRectangle? GetBobAreaRectangle(uint bobId)
         {
             uint index = bobId - _firstBobId;
             if (index >= _bobCount)
